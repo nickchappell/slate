@@ -1,0 +1,16 @@
+[project]
+name = "slate"
+version = "0.1.0"
+description = "Add your description here"
+authors = [
+    { name = "Nick Chappell", email = "nick@intronic.org" }
+]
+requires-python = ">=3.14"
+dependencies = []
+
+[project.scripts]
+slate = "slate:main"
+
+[build-system]
+requires = ["uv_build>=0.11.24,<0.12.0"]
+build-backend = "uv_build"
