@@ -1,0 +1,40 @@
+# Sample slate config file.
+#
+# Copy to the default location and edit:
+#   mkdir -p ~/.config/slate && cp config.example.toml ~/.config/slate/config.toml
+#
+# Or point SLATE_CONFIG at a copy kept elsewhere. See "Configuration" in
+# PROJECT_SPEC.md for resolution order and precedence rules (CLI flags
+# always override values set here).
+#
+# This file is entirely optional — with no config file present, slate
+# runs on its built-in defaults.
+
+[defaults]
+prepend_generated_name = false
+prefix = "Boston, MA"
+suffix = ""
+generate_undo_script = true
+
+# Vision-language model used for captioning, as a Hugging Face repo ID
+# resolved by mlx-vlm/huggingface_hub (see "Model Caching" in
+# PROJECT_SPEC.md). Default below is the spec's chosen model: small,
+# fast, good general scene/object recognition.
+#
+# Other models mlx-vlm supports, if quality/speed needs shift:
+#   - Smaller/faster, purpose-built for short captions:
+#       vikhyatk/moondream2
+#       (canonical repo; not an mlx-community quantized build — confirm
+#       an MLX-compatible revision/quant exists before switching to it)
+#   - Larger, better fine-grained accuracy (~5GB, slower):
+#       mlx-community/Qwen2.5-VL-7B-Instruct-4bit
+model = "mlx-community/Qwen2-VL-2B-Instruct-4bit"
+
+# Max length (in characters) of the assembled filename stem (original name
+# + generated caption + prefix/suffix, before the .MOV/.MP4 extension).
+# Default is 255, APFS's per-path-component limit. If assembly produces a
+# stem longer than this, it's truncated to exactly one character *under*
+# this limit (not equal to it) — see "Filename Assembly" in
+# PROJECT_SPEC.md for the exact rule and a known caveat about multi-byte
+# characters.
+max_file_name_length = 255
