@@ -5,6 +5,9 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+from rich.prompt import Confirm
+
+from slate import output
 from slate.config import load_config
 from slate.extraction import ExtractionError, extract_frame
 from slate.filenames import assemble_stem, normalize_caption, truncate_caption
@@ -118,9 +121,9 @@ def _effective_settings(args: argparse.Namespace):
 def _run_preflight_or_exit() -> None:
     failures = run_preflight_checks()
     if failures:
-        print("slate cannot run in this environment:", file=sys.stderr)
+        output.fatal("slate cannot run in this environment:")
         for message in failures:
-            print(f"  - {message}", file=sys.stderr)
+            output.fatal(f"  - {message}")
         sys.exit(1)
 
 
@@ -154,13 +157,13 @@ def run_phase1(
         original_files = group.original_files
         match = find_existing_match(existing, original_files)
         if match is not None:
-            print(f"SKIP (already in mappings.json): {' / '.join(original_files)}")
+            output.skip(f"already in mappings.json: {' / '.join(original_files)}")
             skipped_entries.append(match)
             all_entries.append(match)
             continue
 
         if group.warning:
-            print(f"WARNING: {group.warning}")
+            output.warn(group.warning)
 
         if group.status == "error":
             entry = MappingEntry(
@@ -168,7 +171,7 @@ def run_phase1(
             )
             new_entries.append(entry)
             all_entries.append(entry)
-            print(f"ERROR: {' / '.join(original_files)}: {group.error}")
+            output.error(f"{' / '.join(original_files)}: {group.error}")
             continue
 
         assert group.source_file is not None
@@ -181,7 +184,7 @@ def run_phase1(
             )
             new_entries.append(entry)
             all_entries.append(entry)
-            print(f"ERROR: {' / '.join(original_files)}: {e}")
+            output.error(f"{' / '.join(original_files)}: {e}")
             continue
 
         raw_caption = generate_caption(str(tmp_frame_path), prompt, model)
@@ -209,7 +212,7 @@ def run_phase1(
         )
         new_entries.append(entry)
         all_entries.append(entry)
-        print(f"OK: {' / '.join(original_files)} -> {new_stem}")
+        output.ok(f"{' / '.join(original_files)} -> {new_stem}")
 
     disambiguated = disambiguate(all_entries)
     for entry in disambiguated:
@@ -238,15 +241,23 @@ def _print_phase1_summary(
     carried_errors = sum(1 for e in skipped_entries if e.status == "error")
     total_errors = new_errors + carried_errors
 
-    print("\nSummary:")
-    print(f"  {len(all_entries)} groups total")
-    print(f"  {len(new_entries)} newly processed")
-    print(f"  {len(skipped_entries)} skipped (already in mappings.json)")
-    print(
-        f"  {len(disambiguated)} disambiguated "
+    error_color = "bold red" if total_errors else "dim"
+    disambig_color = "yellow" if disambiguated else "dim"
+
+    output.console.print("\n[bold]Summary:[/bold]")
+    output.console.print(f"  {len(all_entries)} groups total")
+    output.console.print(f"  [green]{len(new_entries)}[/green] newly processed")
+    output.console.print(
+        f"  [cyan]{len(skipped_entries)}[/cyan] skipped (already in mappings.json)"
+    )
+    output.console.print(
+        f"  [{disambig_color}]{len(disambiguated)}[/{disambig_color}] disambiguated "
         "(suffix appended to avoid a name collision)"
     )
-    print(f"  {total_errors} error ({new_errors} new, {carried_errors} carried over from a previous run)")
+    output.console.print(
+        f"  [{error_color}]{total_errors} error[/{error_color}] "
+        f"({new_errors} new, {carried_errors} carried over from a previous run)"
+    )
 
 
 # --- Phase 2: --rename-only / Phase 3: --process-and-rename --------------
@@ -264,19 +275,19 @@ def run_phase2(
     plan = build_rename_plan(entries, base_dir)
 
     if plan.error_group_count:
-        print(
+        output.warn(
             f"{plan.error_group_count} group(s) skipped due to earlier "
             "extraction errors"
         )
     for message in plan.whole_group_missing:
-        print(message)
+        output.warn(message)
     for message in plan.partial_pair_missing:
-        print(message)
+        output.warn(message)
     for message in plan.collisions:
-        print(message)
+        output.warn(message)
 
     if not plan.operations:
-        print("Nothing to rename.")
+        output.info("Nothing to rename.")
         return
 
     if not assume_yes:
@@ -285,7 +296,7 @@ def run_phase2(
         else:
             confirmed = _prompt_phase2(plan)
         if not confirmed:
-            print("Aborted -- no files renamed.")
+            output.warn("Aborted -- no files renamed.")
             return
 
     log: list[RenameLogEntry] = []
@@ -293,28 +304,27 @@ def run_phase2(
         perform_renames(
             plan,
             log,
-            on_rename=lambda e: print(f"RENAMED: {e.old_path.name} -> {e.new_path.name}"),
+            on_rename=lambda e: output.renamed(f"{e.old_path.name} -> {e.new_path.name}"),
         )
     finally:
         timestamp = datetime.now().strftime("%Y%m%dT%H%M%S")
         if mappings_path.is_file():
             applied_path = write_audit_trail(mappings_path, timestamp)
-            print(f"Audit trail written: {applied_path.name}")
+            output.info(f"Audit trail written: {applied_path.name}")
             if generate_undo_script and log:
                 undo_path = (
                     applied_path.parent
                     / f"mappings.applied.{timestamp}.undo.sh"
                 )
                 write_undo_script(log, undo_path)
-                print(f"Undo script written: {undo_path.name}")
+                output.info(f"Undo script written: {undo_path.name}")
 
 
 def _prompt_phase2(plan) -> bool:
     message = f"{len(plan.operations)} rename operations"
     if plan.problem_count:
-        message += f", {plan.problem_count} issue(s) reported above"
-    message += " -- continue? [y/N] "
-    return input(message).strip().lower() == "y"
+        message += f", [yellow]{plan.problem_count} issue(s)[/yellow] reported above"
+    return Confirm.ask(message, default=False)
 
 
 def _prompt_phase3(plan, newly_processed_ok: list[MappingEntry]) -> bool:
@@ -324,24 +334,24 @@ def _prompt_phase3(plan, newly_processed_ok: list[MappingEntry]) -> bool:
     )
     carried_over_in_plan = len(plan.operations) - newly_captioned_in_plan
 
-    print(
+    output.warn(
         "Phase 3 (--process-and-rename): no review checkpoint -- captions "
-        "below have not been manually reviewed.\n"
+        "below have not been manually reviewed."
     )
-    print(
-        f"{len(plan.operations)} rename operations pending "
-        f"({newly_captioned_in_plan} newly captioned, {carried_over_in_plan} "
-        "carried over from a previous run).\n"
+    output.console.print(
+        f"\n{len(plan.operations)} rename operations pending "
+        f"([green]{newly_captioned_in_plan} newly captioned[/green], "
+        f"[cyan]{carried_over_in_plan} carried over[/cyan] from a previous run).\n"
     )
 
     sample = sorted(newly_processed_ok, key=sort_key)[:3]
     if sample:
-        print("Sample of newly generated captions:")
+        output.console.print("[bold]Sample of newly generated captions:[/bold]")
         for entry in sample:
-            print(f"  {min(entry.original_files)}  ->  {entry.new_stem}")
-        print()
+            output.console.print(f"  {min(entry.original_files)}  ->  [italic]{entry.new_stem}[/italic]")
+        output.console.print()
 
-    return input(f"Continue with {len(plan.operations)} renames? [y/N] ").strip().lower() == "y"
+    return Confirm.ask(f"Continue with {len(plan.operations)} renames?", default=False)
 
 
 # --- Entry point -----------------------------------------------------------
