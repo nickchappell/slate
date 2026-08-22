@@ -30,6 +30,20 @@ generate_undo_script = true
 #       mlx-community/Qwen2.5-VL-7B-Instruct-4bit
 model = "mlx-community/Qwen2-VL-2B-Instruct-4bit"
 
+# Prompt sent to the vision-language model alongside each extracted frame.
+# See "Model / Inference" -> "Caption prompt" in PROJECT_SPEC.md: word-count
+# instructions alone are not reliable with instruction-tuned VLMs, so the
+# default below pairs an explicit format constraint with a one-shot example
+# to steer the model away from full-sentence, preamble-heavy output.
+# Config-only, no CLI flag (a multi-line prompt isn't worth retyping per run).
+prompt = """
+Describe the main subject and action in this frame in 5 to 8 words.
+Respond with only a short lowercase phrase — no full sentence, no
+punctuation, no preamble like "the image shows" or "this is a picture of".
+
+Example output: waves crashing on rocky shore
+"""
+
 # Max length (in characters) of the assembled filename stem (original name
 # + generated caption + prefix/suffix, before the .MOV/.MP4 extension).
 # Default is 255, APFS's per-path-component limit. If assembly produces a
