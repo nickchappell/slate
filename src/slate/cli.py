@@ -40,30 +40,139 @@ def build_parser() -> argparse.ArgumentParser:
         prog="slate",
         description=(
             "Caption and rename camera footage using a local vision-language "
-            "model. See PROJECT_SPEC.md for full behavior."
+            "model. Exactly one of --dry-run / --rename-only / "
+            "--process-and-rename is required. See README.md for a full "
+            "walkthrough and PROJECT_SPEC.md for the complete design."
         ),
     )
 
     mode_group = parser.add_mutually_exclusive_group(required=True)
-    mode_group.add_argument("--dry-run", action="store_true")
-    mode_group.add_argument("--rename-only", action="store_true")
-    mode_group.add_argument("--process-and-rename", action="store_true")
+    mode_group.add_argument(
+        "--dry-run",
+        action="store_true",
+        help=(
+            "Phase 1: scan, pair MOV/MP4 files, and caption each clip. "
+            "Writes mappings.json plus captioned preview JPEGs under review/. "
+            "Never renames or otherwise modifies source files. Safe to "
+            "re-run on the same folder -- groups already in mappings.json "
+            "are skipped and carried over unchanged."
+        ),
+    )
+    mode_group.add_argument(
+        "--rename-only",
+        action="store_true",
+        help=(
+            "Phase 2: apply a previously-reviewed (and optionally "
+            "hand-edited) mappings.json to disk. Requires "
+            "--rename-mappings. Prompts for confirmation unless --yes/-y "
+            "is passed; writes an audit trail and undo script afterward."
+        ),
+    )
+    mode_group.add_argument(
+        "--process-and-rename",
+        action="store_true",
+        help=(
+            "Phase 3: run --dry-run and --rename-only back-to-back in one "
+            "invocation, skipping the pause for hand-editing "
+            "mappings.json in between. Meant for footage you've already "
+            "validated the prompt/model against -- not the default way "
+            "to run a fresh camera dump. Its confirmation prompt shows a "
+            "sample of the actual generated captions, since there's no "
+            "review checkpoint."
+        ),
+    )
 
     input_group = parser.add_mutually_exclusive_group()
-    input_group.add_argument("--input-dir", type=Path)
-    input_group.add_argument("--input-files", nargs="+", type=Path)
+    input_group.add_argument(
+        "--input-dir",
+        type=Path,
+        metavar="DIR",
+        help=(
+            "Directory to scan for camera footage (non-recursive). Mutually "
+            "exclusive with --input-files; required for --dry-run/"
+            "--process-and-rename unless --input-files is given."
+        ),
+    )
+    input_group.add_argument(
+        "--input-files",
+        nargs="+",
+        type=Path,
+        metavar="FILE",
+        help=(
+            "Operate on exactly this list of files -- nothing else in "
+            "their directory is discovered or touched, even a sibling "
+            "MOV/MP4 of a file you did pass. All files must live in the "
+            "same directory. Mutually exclusive with --input-dir."
+        ),
+    )
 
-    parser.add_argument("--rename-mappings", type=Path)
-    parser.add_argument("--model")
+    parser.add_argument(
+        "--rename-mappings",
+        type=Path,
+        metavar="PATH",
+        help="Path to the mappings.json to apply. Required by --rename-only.",
+    )
+    parser.add_argument(
+        "--model",
+        metavar="REPO_ID",
+        help=(
+            "Hugging Face repo ID for the vision-language model used to "
+            "caption frames (any repo mlx-vlm/huggingface_hub can resolve). "
+            "Overrides the config file's model key and the built-in "
+            "default for this run only."
+        ),
+    )
 
     caption_position_group = parser.add_mutually_exclusive_group()
-    caption_position_group.add_argument("--prepend-generated-name", action="store_true")
-    caption_position_group.add_argument("--append-generated-name", action="store_true")
+    caption_position_group.add_argument(
+        "--prepend-generated-name",
+        action="store_true",
+        help=(
+            "Put the caption before the original filename: '<caption> <original_stem>'."
+        ),
+    )
+    caption_position_group.add_argument(
+        "--append-generated-name",
+        action="store_true",
+        help=(
+            "Put the caption after the original filename: "
+            "'<original_stem> <caption>'. This is the default behavior "
+            "when neither flag is passed."
+        ),
+    )
 
-    parser.add_argument("--prefix", default=None)
-    parser.add_argument("--suffix", default=None)
-    parser.add_argument("--skip-generate-undo-script", action="store_true")
-    parser.add_argument("--yes", "-y", action="store_true")
+    parser.add_argument(
+        "--prefix",
+        default=None,
+        metavar="TEXT",
+        help=(
+            "Text prepended to the entire assembled filename, e.g. a shoot's location."
+        ),
+    )
+    parser.add_argument(
+        "--suffix",
+        default=None,
+        metavar="TEXT",
+        help="Text appended to the entire assembled filename.",
+    )
+    parser.add_argument(
+        "--skip-generate-undo-script",
+        action="store_true",
+        help=(
+            "Don't write a mappings.applied.<timestamp>.undo.sh reversal "
+            "script after a rename batch. Undo scripts are written by "
+            "default."
+        ),
+    )
+    parser.add_argument(
+        "--yes",
+        "-y",
+        action="store_true",
+        help=(
+            "Skip the confirmation prompt before renaming in "
+            "--rename-only/--process-and-rename."
+        ),
+    )
 
     return parser
 
