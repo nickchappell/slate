@@ -3,7 +3,10 @@ from slate.filenames import assemble_stem, normalize_caption, truncate_caption
 
 class TestNormalizeCaption:
     def test_collapses_whitespace_and_newlines(self):
-        assert normalize_caption("  waves   crashing\non  rocks  ") == "waves crashing on rocks"
+        assert (
+            normalize_caption("  waves   crashing\non  rocks  ")
+            == "waves crashing on rocks"
+        )
 
     def test_replaces_slash_with_space(self):
         assert normalize_caption("before/after shot") == "before after shot"
@@ -12,10 +15,14 @@ class TestNormalizeCaption:
         assert normalize_caption("waves\0crashing") == "waves crashing"
 
     def test_strips_surrounding_double_quotes(self):
-        assert normalize_caption('"waves crashing on rocks"') == "waves crashing on rocks"
+        assert (
+            normalize_caption('"waves crashing on rocks"') == "waves crashing on rocks"
+        )
 
     def test_strips_surrounding_single_quotes(self):
-        assert normalize_caption("'waves crashing on rocks'") == "waves crashing on rocks"
+        assert (
+            normalize_caption("'waves crashing on rocks'") == "waves crashing on rocks"
+        )
 
     def test_does_not_strip_mismatched_quotes(self):
         assert normalize_caption("'waves crashing\"") == "'waves crashing\""
@@ -24,10 +31,18 @@ class TestNormalizeCaption:
         assert normalize_caption("Waves Crashing") == "waves crashing"
 
     def test_strips_trailing_sentence_punctuation(self):
-        assert normalize_caption("waves crashing on rocks.") == "waves crashing on rocks"
-        assert normalize_caption("waves crashing on rocks!") == "waves crashing on rocks"
-        assert normalize_caption("waves crashing on rocks?") == "waves crashing on rocks"
-        assert normalize_caption("waves crashing on rocks,") == "waves crashing on rocks"
+        assert (
+            normalize_caption("waves crashing on rocks.") == "waves crashing on rocks"
+        )
+        assert (
+            normalize_caption("waves crashing on rocks!") == "waves crashing on rocks"
+        )
+        assert (
+            normalize_caption("waves crashing on rocks?") == "waves crashing on rocks"
+        )
+        assert (
+            normalize_caption("waves crashing on rocks,") == "waves crashing on rocks"
+        )
 
     def test_does_not_strip_internal_punctuation(self):
         assert normalize_caption("waves, then rocks.") == "waves, then rocks"

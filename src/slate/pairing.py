@@ -18,7 +18,9 @@ class FileGroup:
     status: str  # "ok" or "error"
     error: str | None = None
     warning: str | None = None
-    source_file: Path | None = None  # selected file for captioning; None if status == "error"
+    source_file: Path | None = (
+        None  # selected file for captioning; None if status == "error"
+    )
 
     @property
     def original_files(self) -> list[str]:
@@ -47,8 +49,10 @@ def _ffprobe_stream_info(path: Path) -> dict | None:
         result = subprocess.run(
             [
                 "ffprobe",
-                "-v", "error",
-                "-print_format", "json",
+                "-v",
+                "error",
+                "-print_format",
+                "json",
                 "-show_format",
                 "-show_streams",
                 str(path),
@@ -57,7 +61,7 @@ def _ffprobe_stream_info(path: Path) -> dict | None:
             text=True,
             timeout=30,
         )
-    except (subprocess.TimeoutExpired, OSError):
+    except subprocess.TimeoutExpired, OSError:
         return None
     if result.returncode != 0:
         return None
@@ -75,7 +79,7 @@ def _extract_duration_and_frames(info: dict) -> tuple[float | None, int | None]:
     if "duration" in fmt:
         try:
             duration = float(fmt["duration"])
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             duration = None
 
     for stream in info.get("streams", []):
@@ -84,12 +88,12 @@ def _extract_duration_and_frames(info: dict) -> tuple[float | None, int | None]:
         if duration is None and "duration" in stream:
             try:
                 duration = float(stream["duration"])
-            except (TypeError, ValueError):
+            except TypeError, ValueError:
                 pass
         if "nb_frames" in stream:
             try:
                 frames = int(stream["nb_frames"])
-            except (TypeError, ValueError):
+            except TypeError, ValueError:
                 pass
         break
 

@@ -91,7 +91,9 @@ class TestExtractFrame:
         extract_frame(tmp_path / "source.MP4", output)
         assert output.is_file()
 
-    def test_subprocess_exception_treated_as_failure_not_propagated(self, tmp_path, monkeypatch):
+    def test_subprocess_exception_treated_as_failure_not_propagated(
+        self, tmp_path, monkeypatch
+    ):
         def raising_run(cmd, **kwargs):
             raise subprocess.TimeoutExpired(cmd=cmd, timeout=60)
 

@@ -3,7 +3,12 @@ import argparse
 import pytest
 
 import slate.config as config_module
-from slate.cli import UsageError, _effective_settings, _resolve_input_files, build_parser
+from slate.cli import (
+    UsageError,
+    _effective_settings,
+    _resolve_input_files,
+    build_parser,
+)
 from slate.config import CONFIG_ENV_VAR
 
 
@@ -117,9 +122,13 @@ class TestEffectiveSettings:
         # Guarantee "no config file present" deterministically -- regardless
         # of whether this machine happens to have a real
         # ~/.config/slate/config.toml.
-        monkeypatch.setattr(config_module, "DEFAULT_CONFIG_PATH", tmp_path / "config.toml")
+        monkeypatch.setattr(
+            config_module, "DEFAULT_CONFIG_PATH", tmp_path / "config.toml"
+        )
         args = self._base_args()
-        config, model, prepend, prefix, suffix, generate_undo = _effective_settings(args)
+        config, model, prepend, prefix, suffix, generate_undo = _effective_settings(
+            args
+        )
         assert model == config.model
         assert prepend is False
         assert prefix == ""
@@ -174,7 +183,9 @@ class TestEffectiveSettings:
         _config, _model, _prepend, prefix, *_ = _effective_settings(args)
         assert prefix == ""
 
-    def test_skip_undo_script_flag_forces_off_regardless_of_config(self, tmp_path, monkeypatch):
+    def test_skip_undo_script_flag_forces_off_regardless_of_config(
+        self, tmp_path, monkeypatch
+    ):
         config_file = tmp_path / "config.toml"
         config_file.write_text("[defaults]\ngenerate_undo_script = true\n")
         monkeypatch.setenv(CONFIG_ENV_VAR, str(config_file))
@@ -182,7 +193,9 @@ class TestEffectiveSettings:
         *_rest, generate_undo = _effective_settings(args)
         assert generate_undo is False
 
-    def test_config_generate_undo_script_false_respected_without_cli_flag(self, tmp_path, monkeypatch):
+    def test_config_generate_undo_script_false_respected_without_cli_flag(
+        self, tmp_path, monkeypatch
+    ):
         config_file = tmp_path / "config.toml"
         config_file.write_text("[defaults]\ngenerate_undo_script = false\n")
         monkeypatch.setenv(CONFIG_ENV_VAR, str(config_file))

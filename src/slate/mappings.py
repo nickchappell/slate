@@ -18,7 +18,10 @@ class MappingEntry:
     error: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        d: dict[str, Any] = {"status": self.status, "original_files": self.original_files}
+        d: dict[str, Any] = {
+            "status": self.status,
+            "original_files": self.original_files,
+        }
         if self.status == "ok":
             d["new_stem"] = self.new_stem
             d["preview_jpeg"] = self.preview_jpeg
@@ -92,9 +95,7 @@ def disambiguate(
     already include every "ok" group for this invocation (carried-over +
     newly-processed). Returns the list of entries that got a suffix, for the
     run-level summary."""
-    ok_entries = sorted(
-        (e for e in entries if e.status == "ok"), key=sort_key
-    )
+    ok_entries = sorted((e for e in entries if e.status == "ok"), key=sort_key)
 
     seen: set[str] = set()
     disambiguated: list[MappingEntry] = []

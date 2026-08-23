@@ -20,12 +20,17 @@ class TestBuildRenamePlan:
         touch(tmp_path / "a.MOV")
         touch(tmp_path / "a.MP4")
         entries = [
-            MappingEntry(status="ok", original_files=["a.MOV", "a.MP4"], new_stem="a caption")
+            MappingEntry(
+                status="ok", original_files=["a.MOV", "a.MP4"], new_stem="a caption"
+            )
         ]
         plan = build_rename_plan(entries, tmp_path)
         assert len(plan.operations) == 1
         op = plan.operations[0]
-        assert sorted(p.name for p in op.new_paths) == ["a caption.MOV", "a caption.MP4"]
+        assert sorted(p.name for p in op.new_paths) == [
+            "a caption.MOV",
+            "a caption.MP4",
+        ]
 
     def test_error_groups_are_counted_not_planned(self, tmp_path):
         entries = [MappingEntry(status="error", original_files=["a.MOV"], error="boom")]
@@ -35,7 +40,9 @@ class TestBuildRenamePlan:
 
     def test_whole_group_missing_is_reported_and_skipped(self, tmp_path):
         entries = [
-            MappingEntry(status="ok", original_files=["ghost.MOV", "ghost.MP4"], new_stem="x")
+            MappingEntry(
+                status="ok", original_files=["ghost.MOV", "ghost.MP4"], new_stem="x"
+            )
         ]
         plan = build_rename_plan(entries, tmp_path)
         assert plan.operations == []
@@ -46,7 +53,9 @@ class TestBuildRenamePlan:
         touch(tmp_path / "a.MOV")
         # a.MP4 deliberately absent
         entries = [
-            MappingEntry(status="ok", original_files=["a.MOV", "a.MP4"], new_stem="a caption")
+            MappingEntry(
+                status="ok", original_files=["a.MOV", "a.MP4"], new_stem="a caption"
+            )
         ]
         plan = build_rename_plan(entries, tmp_path)
         assert plan.operations == []
@@ -58,7 +67,9 @@ class TestBuildRenamePlan:
         touch(tmp_path / "a.MOV")
         touch(tmp_path / "already taken.MOV")
         entries = [
-            MappingEntry(status="ok", original_files=["a.MOV"], new_stem="already taken")
+            MappingEntry(
+                status="ok", original_files=["a.MOV"], new_stem="already taken"
+            )
         ]
         plan = build_rename_plan(entries, tmp_path)
         assert plan.operations == []
@@ -100,7 +111,9 @@ class TestPerformRenames:
         touch(tmp_path / "a.MOV")
         touch(tmp_path / "a.MP4")
         entries = [
-            MappingEntry(status="ok", original_files=["a.MOV", "a.MP4"], new_stem="a caption")
+            MappingEntry(
+                status="ok", original_files=["a.MOV", "a.MP4"], new_stem="a caption"
+            )
         ]
         plan = build_rename_plan(entries, tmp_path)
         log: list[RenameLogEntry] = []
@@ -111,7 +124,9 @@ class TestPerformRenames:
 
     def test_log_built_incrementally_in_place(self, tmp_path):
         touch(tmp_path / "a.MOV")
-        entries = [MappingEntry(status="ok", original_files=["a.MOV"], new_stem="a caption")]
+        entries = [
+            MappingEntry(status="ok", original_files=["a.MOV"], new_stem="a caption")
+        ]
         plan = build_rename_plan(entries, tmp_path)
         log: list[RenameLogEntry] = []
         perform_renames(plan, log)
@@ -123,7 +138,9 @@ class TestPerformRenames:
         touch(tmp_path / "a.MOV")
         touch(tmp_path / "a.MP4")
         entries = [
-            MappingEntry(status="ok", original_files=["a.MOV", "a.MP4"], new_stem="a caption")
+            MappingEntry(
+                status="ok", original_files=["a.MOV", "a.MP4"], new_stem="a caption"
+            )
         ]
         plan = build_rename_plan(entries, tmp_path)
         seen = []
@@ -164,7 +181,9 @@ class TestWriteUndoScript:
 
     def test_only_includes_entries_actually_in_log(self, tmp_path):
         log = [
-            RenameLogEntry(old_path=tmp_path / "a.MOV", new_path=tmp_path / "a caption.MOV")
+            RenameLogEntry(
+                old_path=tmp_path / "a.MOV", new_path=tmp_path / "a caption.MOV"
+            )
         ]
         script_path = tmp_path / "undo.sh"
         write_undo_script(log, script_path)

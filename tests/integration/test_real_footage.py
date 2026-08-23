@@ -63,7 +63,9 @@ def test_dry_run_against_real_footage(tmp_path):
 
     if error_entries:
         messages = "\n".join(f"  {e.original_files}: {e.error}" for e in error_entries)
-        pytest.fail(f"{len(error_entries)} group(s) failed extraction/pairing:\n{messages}")
+        pytest.fail(
+            f"{len(error_entries)} group(s) failed extraction/pairing:\n{messages}"
+        )
 
     assert mappings_path.is_file()
 

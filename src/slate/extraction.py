@@ -23,17 +23,22 @@ def _try_ffmpeg(source: Path, output_jpeg: Path) -> bool:
     try:
         result = subprocess.run(
             [
-                "ffmpeg", "-y",
-                "-ss", EXTRACTION_TIMESTAMP,
-                "-i", str(source),
-                "-vframes", "1",
-                "-vf", f"scale={EXTRACTION_WIDTH}:-1",
+                "ffmpeg",
+                "-y",
+                "-ss",
+                EXTRACTION_TIMESTAMP,
+                "-i",
+                str(source),
+                "-vframes",
+                "1",
+                "-vf",
+                f"scale={EXTRACTION_WIDTH}:-1",
                 str(output_jpeg),
             ],
             capture_output=True,
             timeout=SUBPROCESS_TIMEOUT,
         )
-    except (subprocess.TimeoutExpired, OSError):
+    except subprocess.TimeoutExpired, OSError:
         return False
     return (
         result.returncode == 0
@@ -51,7 +56,7 @@ def _try_qlmanage(source: Path, output_jpeg: Path) -> bool:
                 capture_output=True,
                 timeout=SUBPROCESS_TIMEOUT,
             )
-        except (subprocess.TimeoutExpired, OSError):
+        except subprocess.TimeoutExpired, OSError:
             return False
 
         # qlmanage -t always outputs PNG, regardless of the requested name.
@@ -61,11 +66,19 @@ def _try_qlmanage(source: Path, output_jpeg: Path) -> bool:
 
         try:
             sips_result = subprocess.run(
-                ["sips", "-s", "format", "jpeg", str(png_path), "--out", str(output_jpeg)],
+                [
+                    "sips",
+                    "-s",
+                    "format",
+                    "jpeg",
+                    str(png_path),
+                    "--out",
+                    str(output_jpeg),
+                ],
                 capture_output=True,
                 timeout=SUBPROCESS_TIMEOUT,
             )
-        except (subprocess.TimeoutExpired, OSError):
+        except subprocess.TimeoutExpired, OSError:
             return False
 
     return (

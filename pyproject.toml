@@ -22,10 +22,24 @@ build-backend = "uv_build"
 [dependency-groups]
 dev = [
     "pytest>=9.1.1",
+    "ruff>=0.16.4",
 ]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = [
     "integration: exercises real ffmpeg/qlmanage/mlx-vlm against footage in tests/fixtures/footage/ (auto-skipped when empty)",
+]
+
+[tool.ruff]
+line-length = 88
+target-version = "py314"
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes (unused imports/variables, etc.)
+    "I",   # isort (import sorting)
+    "UP",  # pyupgrade (modern syntax)
+    "B",   # flake8-bugbear (common bug patterns)
 ]

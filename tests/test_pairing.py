@@ -89,7 +89,10 @@ class TestVerifyPair:
     def test_matching_duration_within_tolerance(self, monkeypatch):
         monkeypatch.setattr(
             "slate.pairing._ffprobe_stream_info",
-            lambda p: {"format": {"duration": "2.0" if p.name == "a.MOV" else "2.05"}, "streams": []},
+            lambda p: {
+                "format": {"duration": "2.0" if p.name == "a.MOV" else "2.05"},
+                "streams": [],
+            },
         )
         matches, message = verify_pair(Path("a.MOV"), Path("a.MP4"))
         assert matches is True
@@ -98,7 +101,10 @@ class TestVerifyPair:
     def test_mismatched_duration_beyond_tolerance(self, monkeypatch):
         monkeypatch.setattr(
             "slate.pairing._ffprobe_stream_info",
-            lambda p: {"format": {"duration": "2.0" if p.name == "a.MOV" else "6.2"}, "streams": []},
+            lambda p: {
+                "format": {"duration": "2.0" if p.name == "a.MOV" else "6.2"},
+                "streams": [],
+            },
         )
         matches, message = verify_pair(Path("a.MOV"), Path("a.MP4"))
         assert matches is False
@@ -108,7 +114,10 @@ class TestVerifyPair:
         # Duration missing entirely -- fall back to nb_frames comparison.
         def fake_info(p):
             frames = "100" if p.name == "a.MOV" else "101"
-            return {"format": {}, "streams": [{"codec_type": "video", "nb_frames": frames}]}
+            return {
+                "format": {},
+                "streams": [{"codec_type": "video", "nb_frames": frames}],
+            }
 
         monkeypatch.setattr("slate.pairing._ffprobe_stream_info", fake_info)
         matches, message = verify_pair(Path("a.MOV"), Path("a.MP4"))
@@ -117,7 +126,10 @@ class TestVerifyPair:
     def test_mismatched_frame_count_beyond_tolerance(self, monkeypatch):
         def fake_info(p):
             frames = "100" if p.name == "a.MOV" else "110"
-            return {"format": {}, "streams": [{"codec_type": "video", "nb_frames": frames}]}
+            return {
+                "format": {},
+                "streams": [{"codec_type": "video", "nb_frames": frames}],
+            }
 
         monkeypatch.setattr("slate.pairing._ffprobe_stream_info", fake_info)
         matches, message = verify_pair(Path("a.MOV"), Path("a.MP4"))
@@ -127,13 +139,19 @@ class TestVerifyPair:
     def test_unreadable_file_falls_back_to_trusting_filename_match(self, monkeypatch):
         monkeypatch.setattr(
             "slate.pairing._ffprobe_stream_info",
-            lambda p: None if p.name == "a.MOV" else {"format": {"duration": "2.0"}, "streams": []},
+            lambda p: (
+                None
+                if p.name == "a.MOV"
+                else {"format": {"duration": "2.0"}, "streams": []}
+            ),
         )
         matches, message = verify_pair(Path("a.MOV"), Path("a.MP4"))
         assert matches is True
         assert "trusting filename match" in message
 
-    def test_no_duration_or_frame_data_falls_back_to_trusting_filename_match(self, monkeypatch):
+    def test_no_duration_or_frame_data_falls_back_to_trusting_filename_match(
+        self, monkeypatch
+    ):
         monkeypatch.setattr(
             "slate.pairing._ffprobe_stream_info",
             lambda p: {"format": {}, "streams": []},

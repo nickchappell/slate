@@ -57,12 +57,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--model")
 
     caption_position_group = parser.add_mutually_exclusive_group()
-    caption_position_group.add_argument(
-        "--prepend-generated-name", action="store_true"
-    )
-    caption_position_group.add_argument(
-        "--append-generated-name", action="store_true"
-    )
+    caption_position_group.add_argument("--prepend-generated-name", action="store_true")
+    caption_position_group.add_argument("--append-generated-name", action="store_true")
 
     parser.add_argument("--prefix", default=None)
     parser.add_argument("--suffix", default=None)
@@ -88,9 +84,7 @@ def _resolve_input_files(args: argparse.Namespace) -> tuple[list[Path], Path]:
             )
         parents = {f.resolve().parent for f in args.input_files}
         if len(parents) != 1:
-            raise UsageError(
-                "--input-files: all files must live in the same directory"
-            )
+            raise UsageError("--input-files: all files must live in the same directory")
         return list(args.input_files), args.input_files[0].parent
 
     raise UsageError("exactly one of --input-dir or --input-files is required")
@@ -304,7 +298,9 @@ def run_phase2(
         perform_renames(
             plan,
             log,
-            on_rename=lambda e: output.renamed(f"{e.old_path.name} -> {e.new_path.name}"),
+            on_rename=lambda e: output.renamed(
+                f"{e.old_path.name} -> {e.new_path.name}"
+            ),
         )
     finally:
         timestamp = datetime.now().strftime("%Y%m%dT%H%M%S")
@@ -313,8 +309,7 @@ def run_phase2(
             output.info(f"Audit trail written: {applied_path.name}")
             if generate_undo_script and log:
                 undo_path = (
-                    applied_path.parent
-                    / f"mappings.applied.{timestamp}.undo.sh"
+                    applied_path.parent / f"mappings.applied.{timestamp}.undo.sh"
                 )
                 write_undo_script(log, undo_path)
                 output.info(f"Undo script written: {undo_path.name}")
@@ -348,7 +343,9 @@ def _prompt_phase3(plan, newly_processed_ok: list[MappingEntry]) -> bool:
     if sample:
         output.console.print("[bold]Sample of newly generated captions:[/bold]")
         for entry in sample:
-            output.console.print(f"  {min(entry.original_files)}  ->  [italic]{entry.new_stem}[/italic]")
+            output.console.print(
+                f"  {min(entry.original_files)}  ->  [italic]{entry.new_stem}[/italic]"
+            )
         output.console.print()
 
     return Confirm.ask(f"Continue with {len(plan.operations)} renames?", default=False)
@@ -365,14 +362,17 @@ def main(argv: list[str] | None = None) -> None:
         if args.dry_run or args.process_and_rename:
             if not args.input_dir and not args.input_files:
                 raise UsageError(
-                    "--dry-run/--process-and-rename requires --input-dir or --input-files"
+                    "--dry-run/--process-and-rename requires --input-dir or "
+                    "--input-files"
                 )
         if args.rename_only and not args.rename_mappings:
             raise UsageError("--rename-only requires --rename-mappings")
 
         _run_preflight_or_exit()
 
-        config, model, prepend, prefix, suffix, generate_undo = _effective_settings(args)
+        config, model, prepend, prefix, suffix, generate_undo = _effective_settings(
+            args
+        )
 
         if args.dry_run:
             files, base_dir = _resolve_input_files(args)

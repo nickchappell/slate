@@ -110,7 +110,7 @@ def perform_renames(
     # leaves the caller holding a record of everything that succeeded before
     # the exception -- see "Log renames incrementally," Phase 2 step 4.
     for op in plan.operations:
-        for old_path, new_path in zip(op.old_paths, op.new_paths):
+        for old_path, new_path in zip(op.old_paths, op.new_paths, strict=True):
             os.rename(old_path, new_path)
             log_entry = RenameLogEntry(old_path=old_path, new_path=new_path)
             log.append(log_entry)
@@ -129,8 +129,8 @@ def write_undo_script(log: list[RenameLogEntry], path: Path) -> None:
     # mid-batch run still gets a correct (partial) undo script.
     lines = ["#!/usr/bin/env bash", "set -euo pipefail", ""]
     for entry in log:
-        lines.append(
-            f"mv -n -- {shlex.quote(str(entry.new_path))} {shlex.quote(str(entry.old_path))}"
-        )
+        old = shlex.quote(str(entry.old_path))
+        new = shlex.quote(str(entry.new_path))
+        lines.append(f"mv -n -- {new} {old}")
     path.write_text("\n".join(lines) + "\n")
     os.chmod(path, 0o755)

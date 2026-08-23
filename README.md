@@ -279,3 +279,25 @@ present):
 ```bash
 uv run pytest
 ```
+
+## Linting & Formatting
+
+[`ruff`](https://docs.astral.sh/ruff/) handles both linting and formatting --
+one fast tool instead of a separate flake8/isort/black stack. Config lives in
+`[tool.ruff]`/`[tool.ruff.lint]` in `pyproject.toml` (88-character line
+length, matching `.editorconfig`; pycodestyle, pyflakes, isort, pyupgrade,
+and flake8-bugbear rules enabled).
+
+```bash
+# check for lint issues (imports, unused code, style, common bug patterns)
+uv run ruff check .
+
+# apply auto-fixes for whatever's safely fixable
+uv run ruff check --fix .
+
+# reformat the codebase
+uv run ruff format .
+
+# check formatting without changing anything (what CI would run)
+uv run ruff format --check .
+```

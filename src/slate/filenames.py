@@ -12,9 +12,7 @@ def normalize_caption(raw: str) -> str:
     # 1. Replace filesystem-unsafe characters with a space, before
     #    whitespace collapsing so any space just introduced here is cleaned
     #    up along with everything else.
-    text = "".join(
-        " " if ch in _FILESYSTEM_UNSAFE_CHARS else ch for ch in raw
-    )
+    text = "".join(" " if ch in _FILESYSTEM_UNSAFE_CHARS else ch for ch in raw)
 
     # 2. Collapse whitespace/newlines to single spaces, trim ends.
     text = " ".join(text.split())
@@ -74,7 +72,9 @@ def assemble_stem(
 
     overflow = len(stem) - limit
     caption_budget = max(len(caption) - overflow, 0)
-    shortened_caption = truncate_caption(caption, caption_budget) if caption_budget else ""
+    shortened_caption = (
+        truncate_caption(caption, caption_budget) if caption_budget else ""
+    )
     stem = build(shortened_caption)
 
     # truncate_caption backs off to a word boundary (can leave a few

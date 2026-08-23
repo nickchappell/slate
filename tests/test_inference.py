@@ -21,7 +21,9 @@ class TestGenerateCaption:
     def test_wires_prompt_image_and_model_through_to_generate(self, monkeypatch):
         calls = {}
 
-        monkeypatch.setattr(inference, "vlm_load", lambda repo: (repo + "-model", repo + "-processor"))
+        monkeypatch.setattr(
+            inference, "vlm_load", lambda repo: (repo + "-model", repo + "-processor")
+        )
         monkeypatch.setattr(inference, "load_config", lambda repo: {"repo": repo})
         monkeypatch.setattr(
             inference,
@@ -39,7 +41,9 @@ class TestGenerateCaption:
 
         monkeypatch.setattr(inference, "vlm_generate", fake_generate)
 
-        result = inference.generate_caption("/tmp/frame.jpg", "describe this", "some/model")
+        result = inference.generate_caption(
+            "/tmp/frame.jpg", "describe this", "some/model"
+        )
 
         assert result == "a caption"
         assert calls["model"] == "some/model-model"
@@ -58,7 +62,9 @@ class TestGenerateCaption:
         monkeypatch.setattr(inference, "vlm_load", fake_load)
         monkeypatch.setattr(inference, "load_config", lambda repo: {})
         monkeypatch.setattr(
-            inference, "apply_chat_template", lambda processor, config, prompt, num_images: prompt
+            inference,
+            "apply_chat_template",
+            lambda processor, config, prompt, num_images: prompt,
         )
         monkeypatch.setattr(
             inference, "vlm_generate", lambda *a, **k: FakeGenerationResult("caption")
@@ -79,7 +85,9 @@ class TestGenerateCaption:
         monkeypatch.setattr(inference, "vlm_load", fake_load)
         monkeypatch.setattr(inference, "load_config", lambda repo: {})
         monkeypatch.setattr(
-            inference, "apply_chat_template", lambda processor, config, prompt, num_images: prompt
+            inference,
+            "apply_chat_template",
+            lambda processor, config, prompt, num_images: prompt,
         )
         monkeypatch.setattr(
             inference, "vlm_generate", lambda *a, **k: FakeGenerationResult("caption")
