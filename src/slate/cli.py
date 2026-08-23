@@ -5,6 +5,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+from rich.markup import escape
 from rich.prompt import Confirm
 
 from slate import output
@@ -35,15 +36,78 @@ class UsageError(Exception):
     pass
 
 
+_USAGE_EXAMPLES = [
+    (
+        "Phase 1: scan a directory, caption clips, write mappings.json for review",
+        "slate --input-dir ~/Movies/Footage --dry-run",
+    ),
+    (
+        "Phase 2: apply a reviewed (optionally hand-edited) mappings.json",
+        "slate --input-dir ~/Movies/Footage --rename-only \\\n"
+        "      --rename-mappings=mappings.json",
+    ),
+    (
+        "Phase 3: caption and rename in one step, skipping the review phase",
+        "slate --input-dir ~/Movies/Footage --process-and-rename",
+    ),
+    (
+        "operate on an explicit file list instead of a whole directory",
+        "slate --input-files clip1.MOV clip1.MP4 clip2.MP4 --dry-run",
+    ),
+    (
+        "prepend the caption instead of appending it, with a known location prefix",
+        "slate --input-dir ~/Movies/Footage --dry-run \\\n"
+        '      --prepend-generated-name --prefix "Boston, MA"',
+    ),
+    (
+        "override the configured/default model for one run",
+        "slate --input-dir ~/Movies/Footage --dry-run \\\n"
+        "      --model mlx-community/Qwen2.5-VL-7B-Instruct-4bit",
+    ),
+    (
+        "check for a newer revision of the model weights",
+        "slate --model-update-check",
+    ),
+]
+
+
+class _HelpAction(argparse.Action):
+    """Prints argparse's normal help, then a colorized Usage examples block
+    via `output.console` -- rich auto-detects TTY vs. redirected output, so
+    this stays consistent with every other status line the app prints
+    (colored/emoji in a real terminal, plain text when piped/redirected)."""
+
+    def __init__(self, option_strings, dest=argparse.SUPPRESS, help=None):
+        super().__init__(option_strings=option_strings, dest=dest, nargs=0, help=help)
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        parser.print_help()
+        output.console.print("\n[bold]Usage examples:[/bold]")
+        for comment, command in _USAGE_EXAMPLES:
+            output.console.print(f"  [dim]# {comment}[/dim]")
+            lines = command.splitlines()
+            output.console.print(f"  [green]$[/green] [cyan]{escape(lines[0])}[/cyan]")
+            for line in lines[1:]:
+                output.console.print(f"    [cyan]{escape(line)}[/cyan]")
+            output.console.print()
+        parser.exit()
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="slate",
+        add_help=False,
         description=(
-            "Caption and rename camera footage using a local vision-language "
-            "model. Exactly one of --dry-run / --rename-only / "
-            "--process-and-rename is required. See README.md for a full "
-            "walkthrough and PROJECT_SPEC.md for the complete design."
+            "Caption and rename camera footage using a local vision-language\n"
+            "model. Exactly one of --dry-run / --rename-only /\n"
+            "--process-and-rename / --model-update-check is required."
         ),
+    )
+    parser.add_argument(
+        "-h",
+        "--help",
+        action=_HelpAction,
+        help="show this help message and exit",
     )
 
     mode_group = parser.add_mutually_exclusive_group(required=True)
