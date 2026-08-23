@@ -11,7 +11,7 @@ from slate import output
 from slate.config import load_config
 from slate.extraction import ExtractionError, extract_frame
 from slate.filenames import assemble_stem, normalize_caption, truncate_caption
-from slate.inference import generate_caption
+from slate.inference import check_for_model_updates, generate_caption
 from slate.mappings import (
     MappingEntry,
     disambiguate,
@@ -79,6 +79,18 @@ def build_parser() -> argparse.ArgumentParser:
             "to run a fresh camera dump. Its confirmation prompt shows a "
             "sample of the actual generated captions, since there's no "
             "review checkpoint."
+        ),
+    )
+    mode_group.add_argument(
+        "--model-update-check",
+        action="store_true",
+        help=(
+            "Check the Hugging Face Hub for a newer revision of the "
+            "configured/--model model and download it if one exists, "
+            "then exit -- no footage is processed. Every other mode uses "
+            "the local cache as-is with no network call once a model is "
+            "downloaded; this is the only way to explicitly refresh it. "
+            "Does not require --input-dir/--input-files."
         ),
     )
 
@@ -536,6 +548,14 @@ def main(argv: list[str] | None = None) -> None:
                 assume_yes=args.yes,
                 phase3_newly_processed_ok=newly_processed_ok,
             )
+
+        elif args.model_update_check:
+            output.info(f"Checking Hugging Face Hub for updates to {model}...")
+            updated, path = check_for_model_updates(model)
+            if updated:
+                output.ok(f"Downloaded a new snapshot of {model} -> {path}")
+            else:
+                output.info(f"{model} is already up to date ({path})")
 
     except UsageError as e:
         parser.error(str(e))
