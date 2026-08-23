@@ -38,13 +38,14 @@ class UsageError(Exception):
 
 _USAGE_EXAMPLES = [
     (
-        "Phase 1: scan a directory, caption clips, write mappings.json for review",
+        "Phase 1: scan a directory, caption clips, write "
+        "rename_mappings.json for review",
         "slate --input-dir ~/Movies/Footage --dry-run",
     ),
     (
-        "Phase 2: apply a reviewed (optionally hand-edited) mappings.json",
+        "Phase 2: apply a reviewed (optionally hand-edited) rename_mappings.json",
         "slate --input-dir ~/Movies/Footage --rename-only \\\n"
-        "      --rename-mappings=mappings.json",
+        "      --rename-mappings=rename_mappings.json",
     ),
     (
         "Phase 3: caption and rename in one step, skipping the review phase",
@@ -55,7 +56,8 @@ _USAGE_EXAMPLES = [
         "slate --input-files clip1.MOV clip1.MP4 clip2.MP4 --dry-run",
     ),
     (
-        "prepend the caption instead of appending it, eg. for a known geographical location prefix",
+        "prepend the caption instead of appending it, eg. for a known "
+        "geographical location prefix",
         "slate --input-dir ~/Movies/Footage --dry-run \\\n"
         '      --prepend-generated-name --prefix "Boston, MA"',
     ),
@@ -116,10 +118,10 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help=(
             "Phase 1: scan, pair MOV/MP4 files, and caption each clip. "
-            "Writes mappings.json plus captioned preview JPEGs under review/. "
-            "Never renames or otherwise modifies source files. Safe to "
-            "re-run on the same folder -- groups already in mappings.json "
-            "are skipped and carried over unchanged."
+            "Writes rename_mappings.json plus captioned preview JPEGs under "
+            "review/. Never renames or otherwise modifies source files. Safe "
+            "to re-run on the same folder -- groups already in "
+            "rename_mappings.json are skipped and carried over unchanged."
         ),
     )
     mode_group.add_argument(
@@ -127,7 +129,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help=(
             "Phase 2: apply a previously-reviewed (and optionally "
-            "hand-edited) mappings.json to disk. Requires "
+            "hand-edited) rename_mappings.json to disk. Requires "
             "--rename-mappings. Prompts for confirmation unless --yes/-y "
             "is passed; writes an audit trail and undo script afterward."
         ),
@@ -138,7 +140,7 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Phase 3: run --dry-run and --rename-only back-to-back in one "
             "invocation, skipping the pause for hand-editing "
-            "mappings.json in between. Meant for footage you've already "
+            "rename_mappings.json in between. Meant for footage you've already "
             "validated the prompt/model against -- not the default way "
             "to run a fresh camera dump. Its confirmation prompt shows a "
             "sample of the actual generated captions, since there's no "
@@ -186,7 +188,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--rename-mappings",
         type=Path,
         metavar="PATH",
-        help="Path to the mappings.json to apply. Required by --rename-only.",
+        help="Path to the rename_mappings.json to apply. Required by --rename-only.",
     )
     parser.add_argument(
         "--model",
@@ -235,9 +237,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--skip-generate-undo-script",
         action="store_true",
         help=(
-            "Don't write a mappings.applied.<timestamp>.undo.sh reversal "
-            "script after a rename batch. Undo scripts are written by "
-            "default."
+            "Don't write an undo_renames_<timestamp>.sh reversal script "
+            "after a rename batch. Undo scripts are written by default."
         ),
     )
     parser.add_argument(
@@ -336,7 +337,9 @@ def run_phase1(
         original_files = group.original_files
         match = find_existing_match(existing, original_files)
         if match is not None:
-            output.skip(f"already in mappings.json: {' / '.join(original_files)}")
+            output.skip(
+                f"already in rename_mappings.json: {' / '.join(original_files)}"
+            )
             skipped_entries.append(match)
             all_entries.append(match)
             continue
@@ -427,7 +430,8 @@ def _print_phase1_summary(
     output.console.print(f"  {len(all_entries)} groups total")
     output.console.print(f"  [green]{len(new_entries)}[/green] newly processed")
     output.console.print(
-        f"  [cyan]{len(skipped_entries)}[/cyan] skipped (already in mappings.json)"
+        f"  [cyan]{len(skipped_entries)}[/cyan] skipped "
+        "(already in rename_mappings.json)"
     )
     output.console.print(
         f"  [{disambig_color}]{len(disambiguated)}[/{disambig_color}] disambiguated "
@@ -490,12 +494,13 @@ def run_phase2(
     finally:
         timestamp = datetime.now().strftime("%Y%m%dT%H%M%S")
         if mappings_path.is_file():
+            top_level_dir = mappings_path.parent
             applied_path = write_audit_trail(mappings_path, timestamp)
-            output.info(f"Audit trail written: {applied_path.name}")
+            output.info(
+                f"Audit trail written: {applied_path.relative_to(top_level_dir)}"
+            )
             if generate_undo_script and log:
-                undo_path = (
-                    applied_path.parent / f"mappings.applied.{timestamp}.undo.sh"
-                )
+                undo_path = top_level_dir / f"undo_renames_{timestamp}.sh"
                 write_undo_script(log, undo_path)
                 output.info(f"Undo script written: {undo_path.name}")
 
@@ -561,7 +566,7 @@ def main(argv: list[str] | None = None) -> None:
 
         if args.dry_run:
             files, base_dir = _resolve_input_files(args)
-            mappings_path = Path("mappings.json")
+            mappings_path = Path("rename_mappings.json")
             review_dir = Path("review")
             run_phase1(
                 files,
@@ -589,7 +594,7 @@ def main(argv: list[str] | None = None) -> None:
 
         elif args.process_and_rename:
             files, base_dir = _resolve_input_files(args)
-            mappings_path = Path("mappings.json")
+            mappings_path = Path("rename_mappings.json")
             review_dir = Path("review")
             all_entries, new_entries, _skipped = run_phase1(
                 files,

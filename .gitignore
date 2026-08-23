@@ -36,9 +36,9 @@ MANIFEST
 *.MP4
 
 # slate run output -- see "Workflow Modes" / "Undo Script" in PROJECT_SPEC.md
-mappings.json
-mappings.applied.*.json
-mappings.applied.*.undo.sh
+rename_mappings.json
+applied_renames_*.json
+undo_renames_*.sh
 /review/
 
 # PyInstaller

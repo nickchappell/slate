@@ -64,7 +64,7 @@ executable — they say nothing about whether `ffmpeg`/`qlmanage` can decode
 any *particular* clip's codec. That's a separate, per-file concern already
 covered by the attempt-and-fallback ladder in Frame Extraction Strategy
 (above): a clip-specific decode failure is expected, recoverable, and
-handled by marking that one group `"error"` in `mappings.json`, not by
+handled by marking that one group `"error"` in `rename_mappings.json`, not by
 failing the whole run. Preflight checks catch the case where the tool
 can't function *at all*; the extraction ladder catches the case where one
 clip can't be decoded even though the tools are present and working.
@@ -312,7 +312,7 @@ sips -s format jpeg /tmp/A017_C015_0806GQ.mov.png --out /tmp/frame.jpg
 **Step 3 — if `qlmanage` also fails** (no output produced, e.g. no
 QuickLook generator registered for that file's type): this clip cannot be
 processed. **Print an error naming the file, mark its group as errored in
-`mappings.json`** (see the `status` field in Phase 1's schema, below),
+`rename_mappings.json`** (see the `status` field in Phase 1's schema, below),
 **and move on to the next file** — this must not halt the rest of the
 batch, consistent with how partial failures are already handled elsewhere
 in this doc (Phase 2 pre-flight, the MOV/MP4 pair-deletion edge case).
@@ -338,7 +338,7 @@ not on `slate`.
 Two mutually exclusive ways to tell `slate` which files to operate on for a
 given invocation. Applies to `--dry-run` and `--process-and-rename`
 (anything that does file discovery); `--rename-only` doesn't discover files
-at all — it operates purely on the `mappings.json` it's given.
+at all — it operates purely on the `rename_mappings.json` it's given.
 
 - **`--input-dir DIR`** (directory-scan mode): walks `DIR` for camera
   footage files, grouping by shared stem per the Pairing Logic below.
@@ -409,7 +409,7 @@ selection step only — it doesn't itself decode anything.
    - **If verified as *not* matching** — ffprobe reads both files
      successfully, but duration and frame count both fall outside their
      tolerances — treat the group as **failed, not resolvable
-     automatically**: write it to `mappings.json` as an `"error"` group
+     automatically**: write it to `rename_mappings.json` as an `"error"` group
      (same mechanism as Frame Extraction Strategy Step 3), with an `error`
      message that names the specific mismatch (e.g. "same-stem files
      `.MOV`/`.MP4` do not appear to be the same recording — durations
@@ -437,7 +437,7 @@ rather than warned about individually.
 
 ## Filename Assembly
 
-Controls how the final `new_stem` (the value written to `mappings.json` and
+Controls how the final `new_stem` (the value written to `rename_mappings.json` and
 ultimately used for the rename, per the MOV/MP4 Pairing Logic above) is
 built from the original filename stem, the generated caption, and optional
 user-supplied text. This logic runs during Phase 1 (`--dry-run`) and Phase
@@ -541,7 +541,7 @@ that skips the review checkpoint — see Phase 3 below.
 
 1. Determine file groups (Input Selection + MOV/MP4 Pairing Logic, above).
 2. **Re-run behavior — skip groups already present in an existing
-   `mappings.json`.** If a `mappings.json` already exists at the output
+   `rename_mappings.json`.** If a `rename_mappings.json` already exists at the output
    location from an earlier `--dry-run`, load it *before* doing any
    extraction/captioning work, and check each newly-determined group
    against it:
@@ -552,11 +552,11 @@ that skips the review checkpoint — see Phase 3 below.
      — an old `"error"` entry still counts as already processed, and is
      *not* automatically retried on the next run. If the underlying
      problem (e.g. a missing `ffmpeg`) has since been fixed, force a
-     retry by deleting that entry from `mappings.json` before re-running
+     retry by deleting that entry from `rename_mappings.json` before re-running
      — re-running `--dry-run` does not diff error causes, just file sets.
    - For every matched group: **skip extraction/captioning entirely** (no
      `ffmpeg`/`qlmanage` call, no VLM inference), print a line noting the
-     skip (e.g. `SKIP (already in mappings.json): A017_C010_0806GC
+     skip (e.g. `SKIP (already in rename_mappings.json): A017_C010_0806GC
      AMBIENCE-SEASIDE - Long Wharf - Boston, MA.MOV / .MP4`), and carry
      that entry into the output **unchanged** — its existing
      `new_stem`/`preview_jpeg`/`error` are preserved verbatim, not
@@ -566,7 +566,7 @@ that skips the review checkpoint — see Phase 3 below.
      step 8, below) survives a re-run untouched rather than being
      silently overwritten.
    - Any group with no match (new footage added since the last run, or no
-     `mappings.json` existed yet) proceeds to extraction/captioning as
+     `rename_mappings.json` existed yet) proceeds to extraction/captioning as
      normal.
    - This resolves re-running `--dry-run` on the same folder as neither a
      hard overwrite-from-scratch nor a hard error: the output is the
@@ -610,7 +610,7 @@ that skips the review checkpoint — see Phase 3 below.
 5. Do **not** rename source files.
 6. Write the captioned JPEG to a review folder, using the **proposed new
    filename** — so captions can be visually sanity-checked against the frame.
-7. Write a mapping file, `mappings.json` (JSON preferred over YAML — no extra
+7. Write a mapping file, `rename_mappings.json` (JSON preferred over YAML — no extra
    dependency, easily diffable/greppable). Structure is a **list of groups**,
    not a flat old→new dict, since a MOV/MP4 pair maps to one shared new stem:
 
@@ -654,7 +654,7 @@ silently dropped. Two distinct things produce an `"error"` group:
    workflow. (Step 2, above, is what makes this safe across a re-run: hand
    edits to an entry survive as long as `original_files` for that group is
    unchanged.)
-9. **Print a run-level summary** to the console once `mappings.json` has
+9. **Print a run-level summary** to the console once `rename_mappings.json` has
    been written, so re-running `--dry-run` on a folder gives an
    at-a-glance answer to "what did this run actually do?" without having
    to scroll back through individual `SKIP` lines or open the JSON:
@@ -662,7 +662,7 @@ silently dropped. Two distinct things produce an `"error"` group:
    Summary:
      14 groups total
      9 newly processed
-     4 skipped (already in mappings.json)
+     4 skipped (already in rename_mappings.json)
      2 disambiguated (suffix appended to avoid a name collision)
      1 error (0 new, 1 carried over from a previous run)
    ```
@@ -680,12 +680,12 @@ silently dropped. Two distinct things produce an `"error"` group:
    - **Scope note:** this is a count-level summary only — it does not
      attempt to show *what specifically changed* for any individual group
      (e.g. old caption text vs. new, for a group that was manually deleted
-     from `mappings.json` and reprocessed). That finer-grained diff was
+     from `rename_mappings.json` and reprocessed). That finer-grained diff was
      considered and deliberately left out of scope: between this summary
      and the `SKIP` lines already printed per group, the common case
      (adding new footage to a folder) is fully covered without it.
 
-### Phase 2: `--rename-only --rename-mappings=mappings.json`
+### Phase 2: `--rename-only --rename-mappings=rename_mappings.json`
 
 1. Skip extraction/captioning entirely — load the JSON directly.
 2. **Pre-flight check before renaming anything:**
@@ -720,14 +720,15 @@ silently dropped. Two distinct things produce an `"error"` group:
 4. **Log renames incrementally as they happen** (not just at the end) so a
    mid-batch crash (disk full, permissions, locked file) leaves a clear
    record of what already succeeded.
-5. On completion, write an audit trail — e.g. rename `mappings.json` to
-   `mappings.applied.<timestamp>.json` — so a batch can be reversed later
-   if needed.
+5. On completion, write an audit trail — rename `rename_mappings.json` into
+   `review/applied_renames_<timestamp>.json` (a sibling of the preview
+   JPEGs, since both are per-run artifacts of the same batch) — so a batch
+   can be reversed later if needed.
 
 ### Phase 3: `--process-and-rename`
 
 Runs Phase 1's extraction/captioning and Phase 2's renaming in a single
-invocation, skipping the pause for hand-editing `mappings.json`.
+invocation, skipping the pause for hand-editing `rename_mappings.json`.
 
 **Tradeoff, stated explicitly:** this bypasses the human caption-review
 checkpoint that is the stated rationale for the two-phase split. It's
@@ -738,7 +739,7 @@ haven't captioned with this model/prompt before.
 
 To keep the risk bounded, Phase 3 must **not** skip the safety mechanics
 from Phase 2 — only the manual review pause:
-1. Run extraction → captioning as in Phase 1, writing `mappings.json` and
+1. Run extraction → captioning as in Phase 1, writing `rename_mappings.json` and
    the preview JPEGs to the review folder (unchanged, for audit purposes
    even though nothing pauses on them).
 2. Immediately run Phase 2's pre-flight checks (missing files, name
@@ -747,7 +748,7 @@ from Phase 2 — only the manual review pause:
    than Phase 2's**, to reflect that Phase 3 has no review checkpoint at
    all (see "Stronger confirmation prompt," below).
 3. The only thing removed relative to running Phase 1 then Phase 2
-   back-to-back is the opportunity to edit `mappings.json` between them.
+   back-to-back is the opportunity to edit `rename_mappings.json` between them.
 
 **Stronger confirmation prompt.** Phase 2's plain "N rename operations —
 continue? [y/N]" is enough there because a human has already reviewed
@@ -788,7 +789,7 @@ Continue with 42 renames? [y/N]
 ### Undo Script: on by default, `--skip-generate-undo-script` to disable
 
 Applies to both Phase 2 and Phase 3 — anywhere a rename batch is actually
-executed. Complements the `mappings.applied.<timestamp>.json` audit trail
+executed. Complements the `applied_renames_<timestamp>.json` audit trail
 with a directly-runnable reversal: a plain shell script requires no
 re-parsing of JSON and no reimplementation of rename logic to undo a
 batch, which matters if the JSON structure ever changes or `slate` itself
@@ -800,9 +801,12 @@ is unavailable.
    reversal strategy). Defaulting to on matches the audit trail's stated
    purpose ("so a batch can be reversed later if needed") — a safety net
    only works if it doesn't depend on being remembered.
-2. Written as `mappings.applied.<timestamp>.undo.sh` alongside the
-   corresponding `mappings.applied.<timestamp>.json` — the shared
-   timestamp keeps the two files correlated.
+2. Written as `undo_renames_<timestamp>.sh` at the top level
+   (alongside where `rename_mappings.json` used to be), *not* inside `review/`
+   with its corresponding `applied_renames_<timestamp>.json` — kept easy
+   to find and run directly (`./undo_renames_<timestamp>.sh`)
+   rather than buried with preview JPEGs. The shared timestamp is what
+   correlates the two files, not directory placement.
 3. **Only include renames that actually succeeded**, per the incremental
    rename log from step 4 of Phase 2 — a batch that crashes partway
    through should produce an undo script that correctly reverses only
@@ -816,7 +820,7 @@ is unavailable.
    ```
    - **Quote every path** (e.g. via Python's `shlex.quote`) — filenames in
      this dataset routinely contain spaces and commas (see the
-     `mappings.json` example above), so naive unquoted `mv` lines would
+     `rename_mappings.json` example above), so naive unquoted `mv` lines would
      break or, worse, misparse as extra arguments.
    - Use `mv -n` (no-clobber) rather than plain `mv`: if a file matching
      the old name already exists at undo time (e.g. the user manually
@@ -834,7 +838,7 @@ These were identified as open questions, not yet decided:
 
 1. ~~**Re-running `--dry-run` on the same folder**~~ — resolved via the
    re-run/skip behavior in Phase 1 step 2, above: groups whose
-   `original_files` already appear in an existing `mappings.json` are
+   `original_files` already appear in an existing `rename_mappings.json` are
    skipped and carried over unchanged (printed as `SKIP`), regardless of
    prior `status`; only new, previously-unseen groups get (re-)processed.
    Net effect is neither overwrite-from-scratch nor a hard error, but an
@@ -902,7 +906,7 @@ Inference, above, respectively) — everything else in `config.toml`
 `generate_undo_script`) has a matching flag it can be overridden with.
 
 **Format:** TOML — matches `pyproject.toml`, human-editable with comments,
-unlike `mappings.json`/`mappings.applied.*.json` which are machine-written
+unlike `rename_mappings.json`/`applied_renames_*.json` which are machine-written
 and meant to be diffed/greppable rather than hand-authored from scratch.
 
 **Example:** see `config.example.toml` at the repo root — persists some of
@@ -951,7 +955,7 @@ slate = "slate.cli:app"
 uv tool install .
 # then callable anywhere as:
 slate --input-dir ~/Footage --dry-run
-slate --input-dir ~/Footage --rename-only --rename-mappings=mappings.json
+slate --input-dir ~/Footage --rename-only --rename-mappings=rename_mappings.json
 slate --input-dir ~/Footage --process-and-rename
 # undo script is written by default; opt out with:
 slate --input-dir ~/Footage --process-and-rename --skip-generate-undo-script

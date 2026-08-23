@@ -150,12 +150,34 @@ class TestPerformRenames:
 
 class TestWriteAuditTrail:
     def test_renames_mappings_file_to_applied_name(self, tmp_path):
-        mappings_path = tmp_path / "mappings.json"
+        mappings_path = tmp_path / "rename_mappings.json"
         mappings_path.write_text("[]")
         applied_path = write_audit_trail(mappings_path, "20260101T000000")
         assert not mappings_path.exists()
-        assert applied_path.name == "mappings.applied.20260101T000000.json"
+        assert applied_path.name == "applied_renames_20260101T000000.json"
         assert applied_path.read_text() == "[]"
+
+    def test_writes_into_review_dir_sibling_of_mappings_path(self, tmp_path):
+        mappings_path = tmp_path / "rename_mappings.json"
+        mappings_path.write_text("[]")
+        applied_path = write_audit_trail(mappings_path, "20260101T000000")
+        assert applied_path.parent == tmp_path / "review"
+
+    def test_creates_review_dir_if_missing(self, tmp_path):
+        mappings_path = tmp_path / "rename_mappings.json"
+        mappings_path.write_text("[]")
+        assert not (tmp_path / "review").exists()
+        write_audit_trail(mappings_path, "20260101T000000")
+        assert (tmp_path / "review").is_dir()
+
+    def test_reuses_existing_review_dir(self, tmp_path):
+        (tmp_path / "review").mkdir()
+        (tmp_path / "review" / "some-preview.jpg").write_bytes(b"fake")
+        mappings_path = tmp_path / "rename_mappings.json"
+        mappings_path.write_text("[]")
+        applied_path = write_audit_trail(mappings_path, "20260101T000000")
+        assert applied_path.parent == tmp_path / "review"
+        assert (tmp_path / "review" / "some-preview.jpg").is_file()
 
 
 class TestWriteUndoScript:

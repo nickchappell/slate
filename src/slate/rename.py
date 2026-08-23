@@ -119,7 +119,13 @@ def perform_renames(
 
 
 def write_audit_trail(mappings_path: Path, timestamp: str) -> Path:
-    applied_path = mappings_path.parent / f"mappings.applied.{timestamp}.json"
+    # Written into review/ (a sibling of mappings_path, matching Phase 1's
+    # convention that rename_mappings.json and review/ always live together)
+    # -- not alongside the undo script, which stays at the top level for
+    # easy discovery/running. The shared timestamp correlates the two.
+    review_dir = mappings_path.parent / "review"
+    review_dir.mkdir(parents=True, exist_ok=True)
+    applied_path = review_dir / f"applied_renames_{timestamp}.json"
     os.rename(mappings_path, applied_path)
     return applied_path
 

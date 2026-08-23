@@ -28,8 +28,9 @@ class FileGroup:
 
 
 def discover_input_dir(input_dir: Path) -> list[Path]:
-    # Flat listing, not recursive -- matches mappings.json's bare-filename
-    # schema, which assumes one flat directory per camera dump/import.
+    # Flat listing, not recursive -- matches rename_mappings.json's
+    # bare-filename schema, which assumes one flat directory per camera
+    # dump/import.
     return sorted(
         p
         for p in input_dir.iterdir()
