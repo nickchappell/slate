@@ -231,44 +231,51 @@ implement video decoding, image processing, or caption generation itself:
 
 ## Tests
 
+The suite is split into two layers -- fast mocked unit tests, and slower
+integration tests that exercise real `ffmpeg`/`qlmanage`/`mlx-vlm` against
+real footage.
+
+**To run unit tests only:**
+
 ```bash
-uv run pytest
+uv run pytest tests/ --ignore=tests/integration
 ```
 
-The suite is split into two layers:
+Fully mocked -- no `ffmpeg`, no real video files, no model download, and no
+network access. Every subprocess call (`ffmpeg`/`ffprobe`/`qlmanage`/`sips`)
+and every `mlx-vlm` call is monkeypatched. Runs in well under a second and is
+safe to run anywhere, including CI. This is also what a plain `uv run pytest`
+effectively reduces to as long as `tests/fixtures/footage/` is empty, since
+the integration tests auto-skip in that case -- but the command above is the
+explicit, unambiguous way to ask for unit tests specifically.
 
-- **Unit tests (`tests/*.py`)** -- fast, fully mocked, no `ffmpeg`, no real
-  video files, no model download, and no network access. Every subprocess
-  call (`ffmpeg`/`ffprobe`/`qlmanage`/`sips`) and every `mlx-vlm` call is
-  monkeypatched. These run in well under a second and are safe to run
-  anywhere, including CI.
-- **Integration tests (`tests/integration/`)** -- exercise the real
-  pipeline: actual `ffmpeg`/`qlmanage` extraction and actual `mlx-vlm`
-  inference (which will trigger the one-time model download on first run;
-  see "Model weights," above) against whatever's in
-  `tests/fixtures/footage/`.
+**To run integration/fixture-based tests:**
 
-To run the real-footage integration tests, drop `.MOV`/`.MP4` clips (pairs or
-singles -- a couple of representative samples is enough) into:
+First, drop real `.MOV`/`.MP4` clips (pairs or singles -- a couple of
+representative samples is enough, not a full camera dump) into:
 
 ```
 tests/fixtures/footage/
 ```
 
-These are automatically covered by this repo's `.gitignore` (which excludes
-all `*.MOV`/`*.mp4` files anywhere in the tree), so anything you put there
-never gets committed regardless of size. If that directory is empty, the
-integration tests auto-skip rather than fail -- an empty checkout, or a
-non-Apple-Silicon machine, won't break the rest of the suite.
+This is already covered by the repo's `.gitignore` (which excludes all
+`*.MOV`/`*.mp4` files anywhere in the tree), so anything placed there never
+gets committed regardless of size. Then run:
 
 ```bash
-# unit tests only (explicit, though this is also what happens by default
-# with an empty tests/fixtures/footage/)
-uv run pytest tests/ --ignore=tests/integration
-
-# everything, including real-footage tests (if fixtures are present)
-uv run pytest
-
-# only the integration tests
 uv run pytest -m integration
+```
+
+This exercises the real pipeline end-to-end: actual `ffmpeg`/`qlmanage`
+frame extraction and actual `mlx-vlm` inference against whatever's in
+`tests/fixtures/footage/` (triggering the one-time model download on first
+run -- see "Model weights," above). If that directory is empty, these tests
+report as `skipped` rather than failing, so an empty checkout or a
+non-Apple-Silicon machine won't break anything.
+
+**To run everything** (unit tests, plus integration tests if fixtures are
+present):
+
+```bash
+uv run pytest
 ```
