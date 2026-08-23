@@ -3,6 +3,7 @@ import argparse
 import pytest
 
 import slate.config as config_module
+from slate import cli
 from slate.cli import (
     UsageError,
     _effective_settings,
@@ -10,6 +11,7 @@ from slate.cli import (
     build_parser,
 )
 from slate.config import CONFIG_ENV_VAR
+from slate.mappings import MappingEntry
 
 
 def touch(path):
@@ -202,3 +204,104 @@ class TestEffectiveSettings:
         args = self._base_args()
         *_rest, generate_undo = _effective_settings(args)
         assert generate_undo is False
+
+
+class TestRunPhase2:
+    """Regression coverage for cli.run_phase2's file-naming/placement
+    conventions -- these live in cli.py itself (not rename.py's lower-level
+    primitives, which are already covered in test_rename.py), and have
+    changed more than once, so they're worth locking in explicitly."""
+
+    def test_writes_audit_trail_into_review_and_undo_script_at_top_level(
+        self, tmp_path
+    ):
+        touch(tmp_path / "a.MOV")
+        mappings_path = tmp_path / "rename_mappings.json"
+        mappings_path.write_text("[]")
+        entries = [
+            MappingEntry(status="ok", original_files=["a.MOV"], new_stem="a caption")
+        ]
+
+        cli.run_phase2(
+            entries,
+            tmp_path,
+            mappings_path,
+            generate_undo_script=True,
+            assume_yes=True,
+        )
+
+        assert (tmp_path / "a caption.MOV").is_file()
+        assert not mappings_path.exists()
+
+        applied_files = list((tmp_path / "review").glob("applied_renames_*.json"))
+        assert len(applied_files) == 1
+
+        undo_files = list(tmp_path.glob("undo_renames_*.sh"))
+        assert len(undo_files) == 1
+        # same timestamp in both names -- that's what correlates them
+        applied_timestamp = applied_files[0].stem.removeprefix("applied_renames_")
+        undo_timestamp = undo_files[0].stem.removeprefix("undo_renames_")
+        assert applied_timestamp == undo_timestamp
+
+    def test_skip_generate_undo_script_omits_undo_file_but_keeps_audit_trail(
+        self, tmp_path
+    ):
+        touch(tmp_path / "a.MOV")
+        mappings_path = tmp_path / "rename_mappings.json"
+        mappings_path.write_text("[]")
+        entries = [
+            MappingEntry(status="ok", original_files=["a.MOV"], new_stem="a caption")
+        ]
+
+        cli.run_phase2(
+            entries,
+            tmp_path,
+            mappings_path,
+            generate_undo_script=False,
+            assume_yes=True,
+        )
+
+        assert list(tmp_path.glob("undo_renames_*.sh")) == []
+        assert len(list((tmp_path / "review").glob("applied_renames_*.json"))) == 1
+
+    def test_nothing_to_rename_leaves_mappings_file_untouched(self, tmp_path):
+        mappings_path = tmp_path / "rename_mappings.json"
+        mappings_path.write_text("[]")
+        entries = [MappingEntry(status="error", original_files=["a.MOV"], error="boom")]
+
+        cli.run_phase2(
+            entries,
+            tmp_path,
+            mappings_path,
+            generate_undo_script=True,
+            assume_yes=True,
+        )
+
+        assert mappings_path.is_file()
+        assert not (tmp_path / "review").exists()
+        assert list(tmp_path.glob("undo_renames_*.sh")) == []
+
+    def test_declined_confirmation_renames_nothing_and_writes_no_audit_trail(
+        self, tmp_path, monkeypatch
+    ):
+        touch(tmp_path / "a.MOV")
+        mappings_path = tmp_path / "rename_mappings.json"
+        mappings_path.write_text("[]")
+        entries = [
+            MappingEntry(status="ok", original_files=["a.MOV"], new_stem="a caption")
+        ]
+
+        monkeypatch.setattr(cli.Confirm, "ask", lambda *a, **k: False)
+
+        cli.run_phase2(
+            entries,
+            tmp_path,
+            mappings_path,
+            generate_undo_script=True,
+            assume_yes=False,
+        )
+
+        assert (tmp_path / "a.MOV").is_file()
+        assert mappings_path.is_file()
+        assert not (tmp_path / "review").exists()
+        assert list(tmp_path.glob("undo_renames_*.sh")) == []
