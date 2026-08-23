@@ -55,7 +55,7 @@ _USAGE_EXAMPLES = [
         "slate --input-files clip1.MOV clip1.MP4 clip2.MP4 --dry-run",
     ),
     (
-        "prepend the caption instead of appending it, with a known location prefix",
+        "prepend the caption instead of appending it, eg. for a known geographical location prefix",
         "slate --input-dir ~/Movies/Footage --dry-run \\\n"
         '      --prepend-generated-name --prefix "Boston, MA"',
     ),
