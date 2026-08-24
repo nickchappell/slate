@@ -131,7 +131,7 @@ def build_parser() -> argparse.ArgumentParser:
             "Phase 2: apply a previously-reviewed (and optionally "
             "hand-edited) rename_mappings.json to disk. Requires "
             "--rename-mappings. Prompts for confirmation unless --yes/-y "
-            "is passed; writes an audit trail and undo script afterward."
+            "is passed; writes an audit trail JSON file and undo script afterward."
         ),
     )
     mode_group.add_argument(
