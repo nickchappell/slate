@@ -580,6 +580,15 @@ def main(argv: list[str] | None = None) -> None:
                 suffix=suffix,
                 max_file_name_length=config.max_file_name_length,
             )
+            output.console.print("\n[bold]Next steps:[/bold]")
+            output.console.print(
+                f"  1. Review [cyan]{mappings_path}[/cyan] and edit the "
+                "new_stem field for any files you want renamed differently."
+            )
+            output.console.print(
+                "  2. Apply the renames: "
+                f"[cyan]slate --rename-only --rename-mappings={mappings_path}[/cyan]"
+            )
 
         elif args.rename_only:
             base_dir = args.input_dir if args.input_dir else Path.cwd()
