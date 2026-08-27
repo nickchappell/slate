@@ -303,3 +303,113 @@ uv run ruff format .
 # check formatting without changing anything (what CI would run)
 uv run ruff format --check .
 ```
+
+## Technical Decisions and Opinions
+
+`PROJECT_SPEC.md` has the full reasoning behind every decision below; this
+section is a map of the load-bearing ones, for anyone extending the app who
+wants to know why something works the way it does before changing it.
+
+**Platform.** Apple Silicon is a hard requirement, not a soft preference --
+`mlx-vlm` only runs on Apple Silicon, and ProRes RAW decoding depends on
+macOS-only frameworks (`qlmanage`/AVFoundation). Preflight checks fail fast
+with one specific message per problem (wrong OS, wrong CPU, missing
+`ffmpeg`/`ffprobe`/`qlmanage`/`sips`), all reported together in one pass,
+rather than surfacing a cryptic import error or a `subprocess` failure
+halfway through a batch.
+
+**MOV/MP4 pairing.** A same-stem pair is verified as the same recording via
+`ffprobe` duration (falling back to frame count) before either file is
+trusted as a stand-in for the other -- filename matching alone isn't enough.
+The **smaller file** (not "the MP4," specifically) is picked as the
+captioning source, since 6K ProRes RAW buys no captioning-accuracy benefit
+-- the VLM resizes internally regardless of input resolution -- and only
+slows down frame extraction. A verified mismatch (durations disagree beyond
+tolerance) is written as an `"error"` group rather than guessed at
+automatically; that's for a human to reconcile.
+
+**Frame extraction is attempt-not-predict.** Rather than maintaining a
+static list of "known good" codecs, `slate` just tries `ffmpeg` and checks
+whether it worked. If it fails (ProRes RAW and other camera-RAW formats have
+no `ffmpeg` decoder), it falls back to `qlmanage` -- macOS's QuickLook
+thumbnailer, backed by AVFoundation -- converting its PNG output to JPEG with
+`sips`. This ladder generalizes to other RAW formats (RED `.r3d`,
+Blackmagic `.braw`, etc.) for free, as long as the user has the relevant
+vendor's QuickLook plugin installed, since `qlmanage` does no decoding of
+its own. One frame per clip, at a fixed timestamp -- multi-frame sampling
+was considered and dropped as unjustified complexity (unclear `mlx-vlm`
+multi-image support, and no clear way to merge multiple per-frame captions)
+until real footage actually shows single-frame captions missing meaningful
+content on panning/motion-heavy clips.
+
+**Caption generation and normalization.** Instruction-tuned VLMs default to
+verbose, scene-setting prose unless explicitly steered away from it -- a
+bare word-count request in the prompt isn't reliable on its own, so the
+default prompt pairs a format constraint with a one-shot example, backstopped
+by a fixed max-token cap at generation time (words/tokens/characters are
+three different units; the cap is what actually bounds output length, not
+the prompt wording). Raw output is then defensively normalized (unsafe
+characters stripped, whitespace collapsed, quotes/trailing punctuation
+trimmed, lowercased, capped at 70 characters). Only `/` and the NUL byte are
+filtered -- not `:`, since `slate` renames via `os.rename` directly, never
+through Finder, so the classic Mac `:`/`/` translation quirk doesn't apply
+here.
+
+**Model caching defers entirely to `huggingface_hub`'s standard cache** --
+no bespoke logic in `slate` itself. Every mode resolves the model from the
+local cache with no network call once it's downloaded once; `--model-update-check`
+is the one explicit, opt-in way to check the Hub for a newer revision. This
+keeps "no cloud dependency after first run" true without a freshness check
+silently running (and silently adding network latency) on every invocation.
+
+**Filename assembly truncates the caption, never the original stem or
+`--prefix`/`--suffix`** -- those are the parts a truncation rule must never
+touch, since the whole point of prepend/append/prefix/suffix is that the
+user chose that content deliberately. `max_file_name_length` (default 255,
+matching APFS's per-path-component limit) counts *characters*, not the
+UTF-8 *bytes* APFS actually limits on -- a known, accepted caveat for
+multi-byte captions/locations, not yet worth the complexity of byte-aware
+truncation.
+
+**Two-phase workflow (`--dry-run` then `--rename-only`), plus a combined
+`--process-and-rename`.** The slow/expensive step (decode + inference) is
+deliberately decoupled from the destructive step (renaming real footage),
+with a human review checkpoint in between -- editing `new_stem` by hand in
+`rename_mappings.json` is the actual point of the split, not an
+afterthought. Re-running `--dry-run` on the same folder is safe: a group is
+"already there" if its `original_files` set-matches an existing entry,
+*regardless of that entry's `status`*, so hand-edited captions survive a
+re-run untouched and old errors aren't silently retried. `--process-and-rename`
+exists for batches where the prompt/model has already been validated; it
+keeps every Phase 2 safety mechanic (pre-flight checks, incremental
+logging, audit trail, undo script) and only removes the pause -- its
+confirmation prompt shows a sample of actual generated captions rather than
+just a count, since there's no review checkpoint to lean on.
+
+**Rename safety.** Phase 2 re-checks that every file still exists immediately
+before renaming (files may have moved or been deleted since the dry-run),
+distinguishing a whole group missing (skipped, reported in aggregate) from a
+partial pair missing (warned individually, surviving file left untouched --
+a pair's `original_files` must never silently split). Renames are logged
+incrementally as they happen, not just at the end, so a mid-batch crash
+still leaves a clear, undo-able record of what actually succeeded. The undo
+script is generated by default (`--skip-generate-undo-script` to opt out)
+specifically because a safety net that depends on being remembered isn't
+one; it's kept as a plain, directly-runnable shell script (quoted paths,
+`mv -n`) rather than requiring `slate` itself to still exist/work to reverse
+a batch.
+
+**Configuration precedence is CLI flags > config file > built-in defaults,
+always.** The config file (`~/.config/slate/config.toml`, or `$SLATE_CONFIG`)
+exists purely to avoid retyping flags across runs; it's never required and
+never becomes authoritative over an explicit flag. `max_file_name_length`
+and `prompt` are config-only with no CLI equivalent, since neither is
+something worth retyping per invocation.
+
+**`argparse` over `typer`/`click`.** The original plan favored a modern CLI
+framework, but `--input-files FILE [FILE ...]` (space-separated multi-value
+input, not repeated `--input-files` flags) needs `nargs="+"` on a named
+option, which `click` (and by extension `typer`) doesn't support for
+options -- only for positional arguments. `argparse` handles it natively,
+at the cost of writing `--help` formatting (including the colorized usage
+examples block) by hand instead of getting it for free.

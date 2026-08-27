@@ -936,19 +936,26 @@ slate/
 ├── src/
 │   └── slate/
 │       ├── __init__.py
-│       ├── cli.py
+│       ├── cli.py         # argument parsing + phase orchestration
 │       ├── config.py      # config file resolution/parsing (Configuration, above)
-│       └── filenames.py   # filename assembly + truncation (Filename Assembly, above)
+│       ├── extraction.py  # frame extraction fallback ladder (Frame Extraction Strategy, above)
+│       ├── filenames.py   # filename assembly + truncation (Filename Assembly, above)
+│       ├── inference.py   # model resolution/caching + captioning (Model Caching, above)
+│       ├── mappings.py    # rename_mappings.json read/write + disambiguation
+│       ├── output.py      # centralized colorized/emoji console output
+│       ├── pairing.py     # MOV/MP4 pairing logic (File Pairing & Source Selection, above)
+│       ├── preflight.py   # startup platform/binary checks (Preflight Checks, above)
+│       └── rename.py      # rename plan/execution, audit trail, undo script
 ```
 
 ```toml
 [project]
 name = "slate"
 version = "0.1.0"
-dependencies = ["mlx-vlm", "typer", "rich"]
+dependencies = ["mlx-vlm", "rich", "jinja2"]
 
 [project.scripts]
-slate = "slate.cli:app"
+slate = "slate.cli:main"
 ```
 
 ```bash
