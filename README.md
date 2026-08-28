@@ -41,11 +41,16 @@ uv tool install .
 slate --input-dir ~/Movies/Footage --dry-run
 ```
 
-This scans the directory, pairs up `.MOV`/`.MP4` files from the same
-recording, generates a short caption for each clip with a local VLM, and
+This scans the directory, generates a short caption for each clip with a local VLM, and
 writes a `rename_mappings.json` + a `review/` folder of captioned preview JPEGs --
-without touching any of your original files. Once you've eyeballed the
-captions, apply them:
+without touching any of your original files.
+
+If any files exist as pairs for the same footage but are just different formats (like a raw
+video file paired with a smaller lower res `.mp4` file for proxy/preview), both files are
+matched based on length/frame count (with +/- 0.1% tolerances to account for codec/container
+differences) and treated the same for renaming.
+
+Once you've eyeballed the captions, apply them:
 
 ```bash
 slate --input-dir ~/Movies/Footage --rename-only --rename-mappings=rename_mappings.json
