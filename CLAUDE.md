@@ -61,17 +61,19 @@ inference) is decoupled from the destructive step (renaming real footage),
 with a human review checkpoint in between:
 
 - **`--dry-run`** — discovers files, pairs MOV/MP4 by shared stem, extracts
-  a frame, captions it, and writes `rename_mappings.json` (a JSON list of
-  groups, not renaming anything). Re-running `--dry-run` is safe/incremental:
-  groups already present (matched by `original_files`) are skipped and
-  carried over unchanged, regardless of prior `status`.
-- **`--rename-only --rename-mappings=rename_mappings.json`** — first
+  a frame, captions it, and writes `review/rename_mappings.json` (a JSON
+  list of groups, living inside `review/` alongside the preview JPEGs it
+  describes, not renaming anything). Re-running `--dry-run` is
+  safe/incremental: groups already present (matched by `original_files`)
+  are skipped and carried over unchanged, regardless of prior `status`.
+- **`--rename-only --rename-mappings=review/rename_mappings.json`** — first
   reconciles the mapping against any preview JPEGs a human renamed in
   `review/` (see `review_sync.py`), then re-checks every file still exists,
   confirms, and applies the renames from the (possibly hand-edited, in JSON
   and/or by renaming JPEGs) mapping file. Writes an audit trail
-  (`review/applied_renames_<timestamp>.json`) and, by default, an undo
-  script (`undo_renames_<timestamp>.sh`).
+  (`review/applied_renames_<timestamp>.json`, renamed in place from
+  `rename_mappings.json`) and, by default, an undo script
+  (`undo_renames_<timestamp>.sh`, written one level up from `review/`).
 - **`--process-and-rename`** — runs both phases in one invocation, skipping
   the hand-edit pause. Keeps every Phase 2 safety mechanic; its confirmation
   prompt shows a sample of actual generated captions instead of just a count,

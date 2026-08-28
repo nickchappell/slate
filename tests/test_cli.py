@@ -217,7 +217,9 @@ class TestRunPhase2:
         self, tmp_path
     ):
         touch(tmp_path / "a.MOV")
-        mappings_path = tmp_path / "rename_mappings.json"
+        review_dir = tmp_path / "review"
+        review_dir.mkdir()
+        mappings_path = review_dir / "rename_mappings.json"
         mappings_path.write_text("[]")
         entries = [
             MappingEntry(status="ok", original_files=["a.MOV"], new_stem="a caption")
@@ -234,7 +236,7 @@ class TestRunPhase2:
         assert (tmp_path / "a caption.MOV").is_file()
         assert not mappings_path.exists()
 
-        applied_files = list((tmp_path / "review").glob("applied_renames_*.json"))
+        applied_files = list(review_dir.glob("applied_renames_*.json"))
         assert len(applied_files) == 1
 
         undo_files = list(tmp_path.glob("undo_renames_*.sh"))
@@ -248,7 +250,9 @@ class TestRunPhase2:
         self, tmp_path
     ):
         touch(tmp_path / "a.MOV")
-        mappings_path = tmp_path / "rename_mappings.json"
+        review_dir = tmp_path / "review"
+        review_dir.mkdir()
+        mappings_path = review_dir / "rename_mappings.json"
         mappings_path.write_text("[]")
         entries = [
             MappingEntry(status="ok", original_files=["a.MOV"], new_stem="a caption")
@@ -263,10 +267,12 @@ class TestRunPhase2:
         )
 
         assert list(tmp_path.glob("undo_renames_*.sh")) == []
-        assert len(list((tmp_path / "review").glob("applied_renames_*.json"))) == 1
+        assert len(list(review_dir.glob("applied_renames_*.json"))) == 1
 
     def test_nothing_to_rename_leaves_mappings_file_untouched(self, tmp_path):
-        mappings_path = tmp_path / "rename_mappings.json"
+        review_dir = tmp_path / "review"
+        review_dir.mkdir()
+        mappings_path = review_dir / "rename_mappings.json"
         mappings_path.write_text("[]")
         entries = [MappingEntry(status="error", original_files=["a.MOV"], error="boom")]
 
@@ -279,14 +285,16 @@ class TestRunPhase2:
         )
 
         assert mappings_path.is_file()
-        assert not (tmp_path / "review").exists()
+        assert list(review_dir.glob("applied_renames_*.json")) == []
         assert list(tmp_path.glob("undo_renames_*.sh")) == []
 
     def test_declined_confirmation_renames_nothing_and_writes_no_audit_trail(
         self, tmp_path, monkeypatch
     ):
         touch(tmp_path / "a.MOV")
-        mappings_path = tmp_path / "rename_mappings.json"
+        review_dir = tmp_path / "review"
+        review_dir.mkdir()
+        mappings_path = review_dir / "rename_mappings.json"
         mappings_path.write_text("[]")
         entries = [
             MappingEntry(status="ok", original_files=["a.MOV"], new_stem="a caption")
@@ -304,7 +312,7 @@ class TestRunPhase2:
 
         assert (tmp_path / "a.MOV").is_file()
         assert mappings_path.is_file()
-        assert not (tmp_path / "review").exists()
+        assert list(review_dir.glob("applied_renames_*.json")) == []
         assert list(tmp_path.glob("undo_renames_*.sh")) == []
 
 
@@ -320,14 +328,14 @@ class TestRunPhase2ReviewSync:
         review_dir.joinpath("renamed by human.jpg").write_bytes(b"frame")
         preview_sha256 = hash_file(review_dir / "renamed by human.jpg")
 
-        mappings_path = tmp_path / "rename_mappings.json"
+        mappings_path = review_dir / "rename_mappings.json"
         mappings_path.write_text("[]")
         entries = [
             MappingEntry(
                 status="ok",
                 original_files=["a.MOV"],
                 new_stem="original caption",
-                preview_jpeg="review/original caption.jpg",
+                preview_jpeg="original caption.jpg",
                 preview_jpeg_sha256=preview_sha256,
             )
         ]
@@ -343,7 +351,7 @@ class TestRunPhase2ReviewSync:
         assert (tmp_path / "renamed by human.MOV").is_file()
         assert not (tmp_path / "original caption.MOV").exists()
 
-        applied_files = list((tmp_path / "review").glob("applied_renames_*.json"))
+        applied_files = list(review_dir.glob("applied_renames_*.json"))
         applied_entries = load_mappings(applied_files[0])
         assert applied_entries[0].new_stem == "renamed by human"
 
@@ -352,14 +360,14 @@ class TestRunPhase2ReviewSync:
         review_dir = tmp_path / "review"
         review_dir.mkdir()  # preview JPEG deliberately absent
 
-        mappings_path = tmp_path / "rename_mappings.json"
+        mappings_path = review_dir / "rename_mappings.json"
         mappings_path.write_text("[]")
         entries = [
             MappingEntry(
                 status="ok",
                 original_files=["a.MOV"],
                 new_stem="original caption",
-                preview_jpeg="review/original caption.jpg",
+                preview_jpeg="original caption.jpg",
                 preview_jpeg_sha256="deadbeef",
             )
         ]
@@ -389,14 +397,14 @@ class TestRunPhase2ReviewSync:
         review_dir.joinpath("existing target.jpg").write_bytes(b"frame")
         preview_sha256 = hash_file(review_dir / "existing target.jpg")
 
-        mappings_path = tmp_path / "rename_mappings.json"
+        mappings_path = review_dir / "rename_mappings.json"
         mappings_path.write_text("[]")
         entries = [
             MappingEntry(
                 status="ok",
                 original_files=["a.MOV"],
                 new_stem="original caption",
-                preview_jpeg="review/original caption.jpg",
+                preview_jpeg="original caption.jpg",
                 preview_jpeg_sha256=preview_sha256,
             )
         ]
@@ -427,8 +435,8 @@ class TestRunPhase1PreviewHash:
         )
         monkeypatch.setattr(cli, "generate_caption", lambda *a, **k: "a caption")
 
-        mappings_path = tmp_path / "rename_mappings.json"
         review_dir = tmp_path / "review"
+        mappings_path = review_dir / "rename_mappings.json"
 
         _all, new_entries, _skipped = cli.run_phase1(
             [source],
@@ -445,7 +453,7 @@ class TestRunPhase1PreviewHash:
 
         assert len(new_entries) == 1
         entry = new_entries[0]
-        assert entry.preview_jpeg_sha256 == hash_file(tmp_path / entry.preview_jpeg)
+        assert entry.preview_jpeg_sha256 == hash_file(review_dir / entry.preview_jpeg)
 
     def test_same_run_name_collision_does_not_clobber_the_other_preview(
         self, tmp_path, monkeypatch
@@ -469,8 +477,8 @@ class TestRunPhase1PreviewHash:
         monkeypatch.setattr(cli, "extract_frame", fake_extract_frame)
         monkeypatch.setattr(cli, "generate_caption", fake_generate_caption)
 
-        mappings_path = tmp_path / "rename_mappings.json"
         review_dir = tmp_path / "review"
+        mappings_path = review_dir / "rename_mappings.json"
 
         _all, new_entries, _skipped = cli.run_phase1(
             [a, a_b],
@@ -496,8 +504,8 @@ class TestRunPhase1PreviewHash:
 
         # Each entry's on-disk preview holds *its own* frame, and its
         # recorded hash matches that file, not the other entry's.
-        preview_a = tmp_path / entry_a.preview_jpeg
-        preview_a_b = tmp_path / entry_a_b.preview_jpeg
+        preview_a = review_dir / entry_a.preview_jpeg
+        preview_a_b = review_dir / entry_a_b.preview_jpeg
         assert preview_a.read_bytes() == b"frame-for-a"
         assert preview_a_b.read_bytes() == b"frame-for-a b"
         assert entry_a.preview_jpeg_sha256 == hash_file(preview_a)

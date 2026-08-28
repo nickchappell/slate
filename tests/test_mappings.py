@@ -14,7 +14,7 @@ class TestMappingEntryDictConversion:
             status="ok",
             original_files=["a.MOV", "a.MP4"],
             new_stem="a caption",
-            preview_jpeg="review/a caption.jpg",
+            preview_jpeg="a caption.jpg",
             preview_jpeg_sha256="deadbeef",
             source_used_for_caption="a.MP4",
         )

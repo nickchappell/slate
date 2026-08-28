@@ -46,7 +46,7 @@ _USAGE_EXAMPLES = [
     (
         "Phase 2: apply a reviewed (optionally hand-edited) rename_mappings.json",
         "slate --input-dir ~/Movies/Footage --rename-only \\\n"
-        "      --rename-mappings=rename_mappings.json",
+        "      --rename-mappings=review/rename_mappings.json",
     ),
     (
         "Phase 3: caption and rename in one step, skipping the review phase",
@@ -119,10 +119,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help=(
             "Phase 1: scan, pair MOV/MP4 files, and caption each clip. "
-            "Writes rename_mappings.json plus captioned preview JPEGs under "
-            "review/. Never renames or otherwise modifies source files. Safe "
-            "to re-run on the same folder -- groups already in "
-            "rename_mappings.json are skipped and carried over unchanged."
+            "Writes review/rename_mappings.json plus captioned preview "
+            "JPEGs, both under review/. Never renames or otherwise modifies "
+            "source files. Safe to re-run on the same folder -- groups "
+            "already in rename_mappings.json are skipped and carried over "
+            "unchanged."
         ),
     )
     mode_group.add_argument(
@@ -189,7 +190,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--rename-mappings",
         type=Path,
         metavar="PATH",
-        help="Path to the rename_mappings.json to apply. Required by --rename-only.",
+        help=(
+            "Path to the rename_mappings.json to apply (written by --dry-run "
+            "under review/). Required by --rename-only."
+        ),
     )
     parser.add_argument(
         "--model",
@@ -415,12 +419,12 @@ def run_phase1(
     for entry in disambiguated:
         if id(entry) in pending_previews or entry.preview_jpeg is None:
             continue
-        old_preview_path = mappings_path.parent / entry.preview_jpeg
+        old_preview_path = review_dir / entry.preview_jpeg
         new_preview_name = f"{entry.new_stem}.jpg"
         new_preview_path = review_dir / new_preview_name
         if old_preview_path.is_file():
             old_preview_path.rename(new_preview_path)
-        entry.preview_jpeg = str(Path(review_dir.name) / new_preview_name)
+        entry.preview_jpeg = new_preview_name
 
     # Now that every entry's new_stem is final (disambiguated, if it needed
     # to be) and colliding old entries are out of the way, move each newly
@@ -432,7 +436,7 @@ def run_phase1(
         preview_name = f"{entry.new_stem}.jpg"
         preview_path = review_dir / preview_name
         tmp_frame_path.rename(preview_path)
-        entry.preview_jpeg = str(Path(review_dir.name) / preview_name)
+        entry.preview_jpeg = preview_name
 
     save_mappings(mappings_path, all_entries)
     _print_phase1_summary(all_entries, new_entries, skipped_entries, disambiguated)
@@ -482,7 +486,7 @@ def run_phase2(
     assume_yes: bool,
     phase3_newly_processed_ok: list[MappingEntry] | None = None,
 ) -> None:
-    review_dir = mappings_path.parent / "review"
+    review_dir = mappings_path.parent  # rename_mappings.json lives inside review/
     sync_result = sync_from_review(entries, review_dir)
 
     if sync_result.renamed:
@@ -547,7 +551,11 @@ def run_phase2(
     finally:
         timestamp = datetime.now().strftime("%Y%m%dT%H%M%S")
         if mappings_path.is_file():
-            top_level_dir = mappings_path.parent
+            # rename_mappings.json lives inside review/, so the undo script
+            # (meant to sit at the top level for easy discovery/running,
+            # unlike the audit trail which stays alongside the preview
+            # JPEGs it archives) belongs one level above that.
+            top_level_dir = mappings_path.parent.parent
             applied_path = write_audit_trail(mappings_path, timestamp)
             output.info(
                 f"Audit trail written: {applied_path.relative_to(top_level_dir)}"
@@ -619,8 +627,8 @@ def main(argv: list[str] | None = None) -> None:
 
         if args.dry_run:
             files, base_dir = _resolve_input_files(args)
-            mappings_path = Path("rename_mappings.json")
             review_dir = Path("review")
+            mappings_path = review_dir / "rename_mappings.json"
             run_phase1(
                 files,
                 base_dir,
@@ -635,8 +643,9 @@ def main(argv: list[str] | None = None) -> None:
             )
             output.console.print("\n[bold]Next steps:[/bold]")
             output.console.print(
-                f"  1. Review [cyan]{mappings_path}[/cyan] and edit the "
-                "new_stem field for any files you want renamed differently."
+                f"  1. Review the captions: rename a JPEG in [cyan]{review_dir}[/cyan] "
+                "to correct it, or delete one to skip that file. (You can also "
+                f"hand-edit new_stem directly in [cyan]{mappings_path}[/cyan].)"
             )
             output.console.print(
                 "  2. Apply the renames: "
@@ -656,8 +665,8 @@ def main(argv: list[str] | None = None) -> None:
 
         elif args.process_and_rename:
             files, base_dir = _resolve_input_files(args)
-            mappings_path = Path("rename_mappings.json")
             review_dir = Path("review")
+            mappings_path = review_dir / "rename_mappings.json"
             all_entries, new_entries, _skipped = run_phase1(
                 files,
                 base_dir,

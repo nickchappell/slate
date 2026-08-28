@@ -44,8 +44,8 @@ slate --input-dir ~/Movies/Footage --dry-run
 ```
 
 This scans the directory, generates a short caption for each clip with a local VLM, and
-writes a `rename_mappings.json` + a `review/` folder of captioned preview JPEGs --
-without touching any of your original files.
+writes a `review/` folder containing `rename_mappings.json` and the captioned preview
+JPEGs -- without touching any of your original files.
 
 If any files exist as pairs for the same footage but are just different formats (like a raw
 video file paired with a smaller lower res `.mp4` file for proxy/preview), both files are
@@ -55,7 +55,7 @@ differences) and treated the same for renaming.
 Once you've eyeballed the captions, apply them:
 
 ```bash
-slate --input-dir ~/Movies/Footage --rename-only --rename-mappings=rename_mappings.json
+slate --input-dir ~/Movies/Footage --rename-only --rename-mappings=review/rename_mappings.json
 ```
 
 Or skip the review step entirely once you trust the model/prompt for a given
@@ -136,8 +136,9 @@ per invocation:
 ### Phase 1 -- `--dry-run`
 
 Scans for footage, pairs `.MOV`/`.MP4` files, extracts a frame per clip,
-generates a caption, and writes `rename_mappings.json` + a `review/` folder of
-captioned preview JPEGs. **Never renames or modifies your source files.**
+generates a caption, and writes a `review/` folder containing
+`rename_mappings.json` and the captioned preview JPEGs. **Never renames or
+modifies your source files.**
 
 ```bash
 slate --input-dir ~/Movies/Footage --dry-run
@@ -151,9 +152,9 @@ up JPEG renames automatically the next time it runs (see Phase 2, below).
 Deleting a preview JPEG instead of renaming it tells `--rename-only` to skip
 that group entirely.
 
-`rename_mappings.json` can also be hand-edited directly -- fix a bad caption
-in `new_stem`, or delete an entry to force it to be reprocessed on the next
-`--dry-run` -- for anything a JPEG rename can't express. Re-running
+`review/rename_mappings.json` can also be hand-edited directly -- fix a bad
+caption in `new_stem`, or delete an entry to force it to be reprocessed on
+the next `--dry-run` -- for anything a JPEG rename can't express. Re-running
 `--dry-run` on the same folder is safe and incremental: groups already
 present in `rename_mappings.json` are skipped (printed as `SKIP`) and carried
 over unchanged, so edits from either path survive a re-run.
@@ -167,20 +168,21 @@ slate --input-files clip1.MOV clip1.MP4 clip2.MP4 --dry-run
 
 ### Phase 2 -- `--rename-only`
 
-Applies a previously-reviewed `rename_mappings.json` (reviewed by renaming
-preview JPEGs, hand-editing the JSON, or both) to disk:
+Applies a previously-reviewed `review/rename_mappings.json` (reviewed by
+renaming preview JPEGs, hand-editing the JSON, or both) to disk:
 
 ```bash
-slate --input-dir ~/Movies/Footage --rename-only --rename-mappings=rename_mappings.json
+slate --input-dir ~/Movies/Footage --rename-only --rename-mappings=review/rename_mappings.json
 ```
 
 Before checking anything else, this reconciles `rename_mappings.json` against
-`review/`: any preview JPEG a human renamed is matched back to its entry by
-content hash (not filename), and its on-disk name becomes the new `new_stem`.
-A preview JPEG that's gone missing (deleted rather than renamed) causes that
-group to be skipped, with a warning. A JPEG rename takes precedence over
-`new_stem` if the two happen to disagree; if a JPEG was never touched, a
-direct hand-edit to `new_stem` in the JSON is respected as-is.
+the rest of `review/`: any preview JPEG a human renamed is matched back to
+its entry by content hash (not filename), and its on-disk name becomes the
+new `new_stem`. A preview JPEG that's gone missing (deleted rather than
+renamed) causes that group to be skipped, with a warning. A JPEG rename
+takes precedence over `new_stem` if the two happen to disagree; if a JPEG was
+never touched, a direct hand-edit to `new_stem` in the JSON is respected
+as-is.
 
 Then, before renaming anything, this checks that every file still exists
 (files may have moved or been deleted since the dry-run), warns and skips any
@@ -189,13 +191,14 @@ collisions -- reporting every problem up front rather than failing partway
 through a batch. You'll be prompted to confirm before anything is renamed,
 unless `--yes`/`-y` is passed.
 
-After a successful run, `rename_mappings.json` is renamed into
-`review/applied_renames_<timestamp>.json` as an audit trail (a sibling of
-the preview JPEGs), and an undo script
-(`undo_renames_<timestamp>.sh`) is written at the top level by
-default -- a plain, directly-runnable shell script (`./undo_renames_<timestamp>.sh`)
-that reverses every rename that actually succeeded. The shared timestamp
-correlates the two files even though they live in different places.
+After a successful run, `review/rename_mappings.json` is renamed in place
+into `review/applied_renames_<timestamp>.json` as an audit trail (alongside
+the preview JPEGs it describes), and an undo script
+(`undo_renames_<timestamp>.sh`) is written at the top level (one directory
+above `review/`) by default -- a plain, directly-runnable shell script
+(`./undo_renames_<timestamp>.sh`) that reverses every rename that actually
+succeeded. The shared timestamp correlates the two files even though they
+live in different places.
 
 ### Phase 3 -- `--process-and-rename`
 
@@ -477,9 +480,9 @@ truncation.
 **Two-phase workflow (`--dry-run` then `--rename-only`), plus a combined
 `--process-and-rename`.** The slow/expensive step (decode + inference) is
 deliberately decoupled from the destructive step (renaming real footage),
-with a human review checkpoint in between -- editing `new_stem` by hand in
-`rename_mappings.json` is the actual point of the split, not an
-afterthought. Re-running `--dry-run` on the same folder is safe: a group is
+with a human review checkpoint in between -- renaming preview JPEGs in
+`review/` (or hand-editing `new_stem` in `review/rename_mappings.json`
+directly) is the actual point of the split, not an afterthought. Re-running `--dry-run` on the same folder is safe: a group is
 "already there" if its `original_files` set-matches an existing entry,
 *regardless of that entry's `status`*, so hand-edited captions survive a
 re-run untouched and old errors aren't silently retried. `--process-and-rename`

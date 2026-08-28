@@ -29,7 +29,7 @@ class TestSyncFromReview:
             status="ok",
             original_files=["a.MOV"],
             new_stem="original caption",
-            preview_jpeg="review/original caption.jpg",
+            preview_jpeg="original caption.jpg",
             preview_jpeg_sha256=hash_file(review_dir / "renamed by human.jpg"),
         )
 
@@ -37,7 +37,7 @@ class TestSyncFromReview:
 
         assert result.renamed == [entry]
         assert entry.new_stem == "renamed by human"
-        assert entry.preview_jpeg == "review/renamed by human.jpg"
+        assert entry.preview_jpeg == "renamed by human.jpg"
         assert result.deleted == []
 
     def test_untouched_jpeg_is_a_no_op(self, tmp_path):
@@ -48,7 +48,7 @@ class TestSyncFromReview:
             status="ok",
             original_files=["a.MOV"],
             new_stem="original caption",
-            preview_jpeg="review/original caption.jpg",
+            preview_jpeg="original caption.jpg",
             preview_jpeg_sha256=hash_file(review_dir / "original caption.jpg"),
         )
 
@@ -65,7 +65,7 @@ class TestSyncFromReview:
             status="ok",
             original_files=["a.MOV"],
             new_stem="original caption",
-            preview_jpeg="review/original caption.jpg",
+            preview_jpeg="original caption.jpg",
             preview_jpeg_sha256="deadbeef",
         )
 
@@ -80,7 +80,7 @@ class TestSyncFromReview:
             status="ok",
             original_files=["a.MOV"],
             new_stem="original caption",
-            preview_jpeg="review/original caption.jpg",
+            preview_jpeg="original caption.jpg",
             preview_jpeg_sha256="deadbeef",
         )
 
@@ -95,7 +95,7 @@ class TestSyncFromReview:
             status="ok",
             original_files=["a.MOV"],
             new_stem="original caption",
-            preview_jpeg="review/original caption.jpg",
+            preview_jpeg="original caption.jpg",
         )
 
         result = sync_from_review([entry], review_dir)
@@ -125,14 +125,14 @@ class TestSyncFromReview:
             status="ok",
             original_files=["a.MOV"],
             new_stem="a caption",
-            preview_jpeg="review/a caption.jpg",
+            preview_jpeg="a caption.jpg",
             preview_jpeg_sha256=shared_hash,
         )
         entry_b = MappingEntry(
             status="ok",
             original_files=["b.MOV"],
             new_stem="b caption",
-            preview_jpeg="review/b caption.jpg",
+            preview_jpeg="b caption.jpg",
             preview_jpeg_sha256=shared_hash,
         )
 
@@ -152,7 +152,7 @@ class TestSyncFromReview:
             status="ok",
             original_files=["a.MOV"],
             new_stem="original caption",
-            preview_jpeg="review/original caption.jpg",
+            preview_jpeg="original caption.jpg",
             preview_jpeg_sha256="deadbeef",
         )
 
@@ -172,7 +172,7 @@ class TestSyncFromReview:
             status="ok",
             original_files=["a.MOV"],
             new_stem="original a",
-            preview_jpeg="review/original a.jpg",
+            preview_jpeg="original a.jpg",
             preview_jpeg_sha256=hash_file(review_dir / "renamed by human.jpg"),
         )
 
@@ -182,7 +182,7 @@ class TestSyncFromReview:
             status="ok",
             original_files=["b.MOV"],
             new_stem="original b",
-            preview_jpeg="review/original b.jpg",
+            preview_jpeg="original b.jpg",
             preview_jpeg_sha256=hash_file(review_dir / "original b.jpg"),
         )
 
@@ -190,7 +190,7 @@ class TestSyncFromReview:
             status="ok",
             original_files=["c.MOV"],
             new_stem="original c",
-            preview_jpeg="review/original c.jpg",
+            preview_jpeg="original c.jpg",
             preview_jpeg_sha256="deadbeef",
         )
 

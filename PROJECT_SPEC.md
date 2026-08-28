@@ -619,9 +619,14 @@ that skips the review checkpoint — see Phase 3 below.
    stem `"a b"` + caption `"c"` both assemble to `"a b c"`) — writing
    straight to `<new_stem>.jpg` as each entry is processed would let the
    second one silently overwrite the first's preview file on disk.
-7. Write a mapping file, `rename_mappings.json` (JSON preferred over YAML — no extra
-   dependency, easily diffable/greppable). Structure is a **list of groups**,
-   not a flat old→new dict, since a MOV/MP4 pair maps to one shared new stem:
+7. Write a mapping file, `review/rename_mappings.json` — living inside
+   `review/` itself, alongside the preview JPEGs it describes, not as a
+   sibling of that folder (JSON preferred over YAML — no extra dependency,
+   easily diffable/greppable). Structure is a **list of groups**, not a flat
+   old→new dict, since a MOV/MP4 pair maps to one shared new stem.
+   `preview_jpeg` is stored as a bare filename (e.g.
+   `"waves crashing on rocky shore.jpg"`), resolved relative to
+   `rename_mappings.json`'s own directory — the two are always siblings:
 
 ```json
 [
@@ -632,7 +637,7 @@ that skips the review checkpoint — see Phase 3 below.
       "A017_C010_0806GC AMBIENCE-SEASIDE - Long Wharf - Boston, MA.MP4"
     ],
     "new_stem": "A017_C010_0806GC AMBIENCE-SEASIDE - Long Wharf - Boston, MA waves crashing on rocky shore",
-    "preview_jpeg": "review/A017_C010_0806GC ... waves crashing on rocky shore.jpg",
+    "preview_jpeg": "A017_C010_0806GC ... waves crashing on rocky shore.jpg",
     "preview_jpeg_sha256": "b2c1...e4f0",
     "source_used_for_caption": "...MP4"
   },
@@ -712,7 +717,7 @@ silently dropped. Two distinct things produce an `"error"` group:
      and the `SKIP` lines already printed per group, the common case
      (adding new footage to a folder) is fully covered without it.
 
-### Phase 2: `--rename-only --rename-mappings=rename_mappings.json`
+### Phase 2: `--rename-only --rename-mappings=review/rename_mappings.json`
 
 0. **Sync `new_stem` from any renamed preview JPEGs first** (`review_sync.
    sync_from_review`, Phase 1 step 8's other review path) — before anything
@@ -772,10 +777,11 @@ silently dropped. Two distinct things produce an `"error"` group:
 4. **Log renames incrementally as they happen** (not just at the end) so a
    mid-batch crash (disk full, permissions, locked file) leaves a clear
    record of what already succeeded.
-5. On completion, write an audit trail — rename `rename_mappings.json` into
-   `review/applied_renames_<timestamp>.json` (a sibling of the preview
-   JPEGs, since both are per-run artifacts of the same batch) — so a batch
-   can be reversed later if needed.
+5. On completion, write an audit trail — rename `rename_mappings.json` in
+   place, to `applied_renames_<timestamp>.json` within the same `review/`
+   directory it already lived in (alongside the preview JPEGs, since both
+   are per-run artifacts of the same batch) — so a batch can be reversed
+   later if needed.
 
 ### Phase 3: `--process-and-rename`
 
@@ -853,12 +859,12 @@ is unavailable.
    reversal strategy). Defaulting to on matches the audit trail's stated
    purpose ("so a batch can be reversed later if needed") — a safety net
    only works if it doesn't depend on being remembered.
-2. Written as `undo_renames_<timestamp>.sh` at the top level
-   (alongside where `rename_mappings.json` used to be), *not* inside `review/`
-   with its corresponding `applied_renames_<timestamp>.json` — kept easy
-   to find and run directly (`./undo_renames_<timestamp>.sh`)
-   rather than buried with preview JPEGs. The shared timestamp is what
-   correlates the two files, not directory placement.
+2. Written as `undo_renames_<timestamp>.sh` at the top level — one
+   directory above `review/` (where `rename_mappings.json` and its
+   corresponding `applied_renames_<timestamp>.json` live) — kept easy to
+   find and run directly (`./undo_renames_<timestamp>.sh`) rather than
+   buried with preview JPEGs. The shared timestamp is what correlates the
+   two files, not directory placement.
 3. **Only include renames that actually succeeded**, per the incremental
    rename log from step 4 of Phase 2 — a batch that crashes partway
    through should produce an undo script that correctly reverses only
@@ -1014,7 +1020,7 @@ slate = "slate.cli:main"
 uv tool install .
 # then callable anywhere as:
 slate --input-dir ~/Footage --dry-run
-slate --input-dir ~/Footage --rename-only --rename-mappings=rename_mappings.json
+slate --input-dir ~/Footage --rename-only --rename-mappings=review/rename_mappings.json
 slate --input-dir ~/Footage --process-and-rename
 # undo script is written by default; opt out with:
 slate --input-dir ~/Footage --process-and-rename --skip-generate-undo-script

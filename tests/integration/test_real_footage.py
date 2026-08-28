@@ -40,8 +40,8 @@ def test_dry_run_against_real_footage(tmp_path):
     assert files, "expected at least one video file in the footage fixture dir"
 
     config = Config()
-    mappings_path = tmp_path / "mappings.json"
     review_dir = tmp_path / "review"
+    mappings_path = review_dir / "mappings.json"
 
     all_entries, _new_entries, _skipped = cli.run_phase1(
         files,
@@ -72,6 +72,6 @@ def test_dry_run_against_real_footage(tmp_path):
     for entry in ok_entries:
         assert entry.new_stem
         assert entry.new_stem.strip() != ""
-        preview_path = tmp_path / entry.preview_jpeg
+        preview_path = review_dir / entry.preview_jpeg
         assert preview_path.is_file()
         assert preview_path.stat().st_size > 0

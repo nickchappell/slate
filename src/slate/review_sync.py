@@ -65,7 +65,7 @@ def sync_from_review(entries: list[MappingEntry], review_dir: Path) -> SyncResul
         new_stem = jpeg_path.stem
         if new_stem != entry.new_stem:
             entry.new_stem = new_stem
-            entry.preview_jpeg = str(Path(review_dir.name) / jpeg_path.name)
+            entry.preview_jpeg = jpeg_path.name
             result.renamed.append(entry)
 
     for group in by_hash.values():
