@@ -5,6 +5,8 @@ generically-named raw camera video files (e.g. `A017_C015_0806GQ.MOV`) using
 a local vision-language model -- no cloud dependency after the model weights
 are downloaded once.
 
+Built with lots of help from Claude Code.
+
 Personal-use tool. See `PROJECT_SPEC.md` for the full design.
 
 > [!IMPORTANT]
