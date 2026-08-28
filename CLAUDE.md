@@ -38,6 +38,21 @@ full list. Notable targets:
 - `make check` runs lint + format-check + test together
 - `make update` upgrades all dependencies and refreshes `uv.lock`;
   `make outdated` lists what's behind
+- Release process (each requires a clean working tree; `make help` prints
+  a runnable example for every target):
+  - `make bump-version PART=patch|minor|major` (default `patch`) — bumps
+    the version via `uv version --bump`, then commits `pyproject.toml`/
+    `uv.lock` and creates a `vX.Y.Z` git tag. Doesn't push. Signing is
+    inherited from git config (`commit.gpgsign`/`tag.gpgsign`), not
+    controlled by the Makefile.
+  - `make github-release` — creates a GitHub release for the current
+    version's tag via `gh release create --verify-tag --generate-notes`.
+    Checks `gh` is installed and authenticated (`gh auth status`) first,
+    and deliberately fails if the tag hasn't been pushed to `origin` yet
+    (`--verify-tag`) rather than letting `gh` cut a new tag against the
+    wrong commit.
+  - `make create-release PART=...` — `bump-version`, then `git push` +
+    `git push origin <tag>`, then `github-release`, end to end.
 
 ## Architecture
 
