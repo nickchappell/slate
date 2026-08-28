@@ -99,6 +99,18 @@ class _HelpAction(argparse.Action):
         parser.exit()
 
 
+class _VersionAction(argparse.Action):
+    """Prints the running version via `output.console`, same as _HelpAction,
+    instead of argparse's own plain-print version handling."""
+
+    def __init__(self, option_strings, dest=argparse.SUPPRESS, help=None):
+        super().__init__(option_strings=option_strings, dest=dest, nargs=0, help=help)
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        output.console.print(f"slate {APP_VERSION}")
+        parser.exit()
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="slate",
@@ -114,6 +126,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--help",
         action=_HelpAction,
         help="show this help message and exit",
+    )
+    parser.add_argument(
+        "--version",
+        action=_VersionAction,
+        help="show slate's version and exit",
     )
 
     mode_group = parser.add_mutually_exclusive_group(required=True)

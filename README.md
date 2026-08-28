@@ -236,6 +236,7 @@ slate --input-dir ~/Movies/Footage --process-and-rename
 | `--prefix TEXT` / `--suffix TEXT` | Wrap the whole assembled name, e.g. a shoot's location known ahead of time. |
 | `--skip-generate-undo-script` | Suppress the undo script written after Phase 2/3 (on by default). |
 | `--yes` / `-y` | Skip the confirmation prompt in Phase 2/3. |
+| `--version` | Print the installed `slate` version and exit. |
 
 All of the above (except `--model`'s CLI/config resolution) also have a
 config-file equivalent -- see "Configuration" in `PROJECT_SPEC.md`. Two

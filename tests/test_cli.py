@@ -58,6 +58,13 @@ class TestBuildParser:
         args = parser.parse_args(["--dry-run", "--input-dir", "x", "-y"])
         assert args.yes is True
 
+    def test_version_prints_and_exits_without_requiring_a_mode(self, capsys):
+        parser = build_parser()
+        with pytest.raises(SystemExit) as exc_info:
+            parser.parse_args(["--version"])
+        assert exc_info.value.code == 0
+        assert APP_VERSION in capsys.readouterr().out
+
     def test_valid_dry_run_with_input_dir_parses(self):
         parser = build_parser()
         args = parser.parse_args(["--dry-run", "--input-dir", "footage"])
