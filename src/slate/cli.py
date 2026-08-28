@@ -685,7 +685,7 @@ def main(argv: list[str] | None = None) -> None:
             )
             output.console.print("\n[bold]Next steps:[/bold]")
             output.console.print(
-                f"  1. Review the captions: rename a JPEG in [cyan]{review_dir}[/cyan] "
+                f"  1. Review the captions: rename a JPEG in [cyan]{review_dir}/[/cyan] "
                 "to correct it, or delete one to skip that file. (You can also "
                 f"hand-edit new_stem directly in [cyan]{mappings_path}[/cyan].)"
             )
