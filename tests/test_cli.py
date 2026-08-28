@@ -6,12 +6,13 @@ import slate.config as config_module
 from slate import cli
 from slate.cli import (
     UsageError,
+    _check_mapping_version_or_exit,
     _effective_settings,
     _resolve_input_files,
     build_parser,
 )
 from slate.config import CONFIG_ENV_VAR
-from slate.mappings import MappingEntry, load_mappings
+from slate.mappings import APP_VERSION, MappingEntry, load_mappings, save_mappings
 from slate.review_sync import hash_file
 
 
@@ -205,6 +206,28 @@ class TestEffectiveSettings:
         args = self._base_args()
         *_rest, generate_undo = _effective_settings(args)
         assert generate_undo is False
+
+
+class TestCheckMappingVersionOrExit:
+    def test_missing_file_does_not_exit(self, tmp_path):
+        _check_mapping_version_or_exit(tmp_path / "nonexistent.json")
+
+    def test_matching_major_version_does_not_exit(self, tmp_path):
+        path = tmp_path / "mappings.json"
+        save_mappings(path, [])
+        _check_mapping_version_or_exit(path)
+
+    def test_file_with_no_app_version_does_not_exit(self, tmp_path):
+        path = tmp_path / "mappings.json"
+        path.write_text("[]")
+        _check_mapping_version_or_exit(path)
+
+    def test_different_major_version_exits(self, tmp_path):
+        path = tmp_path / "mappings.json"
+        current_major = int(APP_VERSION.split(".")[0])
+        path.write_text(f'{{"app_version": "{current_major + 1}.0.0", "groups": []}}')
+        with pytest.raises(SystemExit):
+            _check_mapping_version_or_exit(path)
 
 
 class TestRunPhase2:

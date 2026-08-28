@@ -62,17 +62,20 @@ with a human review checkpoint in between:
 
 - **`--dry-run`** — discovers files, pairs MOV/MP4 by shared stem, extracts
   a frame, captions it, and writes `review/rename_mappings.json` (a JSON
-  list of groups, living inside `review/` alongside the preview JPEGs it
-  describes, not renaming anything). Re-running `--dry-run` is
-  safe/incremental: groups already present (matched by `original_files`)
-  are skipped and carried over unchanged, regardless of prior `status`.
+  object — `app_version` + a list of `groups` — living inside `review/`
+  alongside the preview JPEGs it describes, not renaming anything).
+  Re-running `--dry-run` is safe/incremental: groups already present
+  (matched by `original_files`) are skipped and carried over unchanged,
+  regardless of prior `status`.
 - **`--rename-only --rename-mappings=review/rename_mappings.json`** — first
-  reconciles the mapping against any preview JPEGs a human renamed in
-  `review/` (see `review_sync.py`), then re-checks every file still exists,
-  confirms, and applies the renames from the (possibly hand-edited, in JSON
-  and/or by renaming JPEGs) mapping file. Writes an audit trail
-  (`review/applied_renames_<timestamp>.json`, renamed in place from
-  `rename_mappings.json`) and, by default, an undo script
+  checks the file's `app_version` against the running app's (refuses to
+  proceed on a major-version difference — see `mappings.
+  major_version_mismatch`), then reconciles the mapping against any preview
+  JPEGs a human renamed in `review/` (see `review_sync.py`), then re-checks
+  every file still exists, confirms, and applies the renames from the
+  (possibly hand-edited, in JSON and/or by renaming JPEGs) mapping file.
+  Writes an audit trail (`review/applied_renames_<timestamp>.json`, renamed
+  in place from `rename_mappings.json`) and, by default, an undo script
   (`undo_renames_<timestamp>.sh`, written one level up from `review/`).
 - **`--process-and-rename`** — runs both phases in one invocation, skipping
   the hand-edit pause. Keeps every Phase 2 safety mechanic; its confirmation
@@ -97,7 +100,8 @@ Module layout under `src/slate/`:
 - `inference.py` — model resolution/caching (defers to `huggingface_hub`'s
   standard cache) + captioning
 - `mappings.py` — `rename_mappings.json` read/write + disambiguation
-  (`_2`/`_3`... suffixes on output-name collisions)
+  (`_2`/`_3`... suffixes on output-name collisions) + `app_version`
+  stamping/major-version-mismatch check
 - `output.py` — centralized `rich`-based colorized console output
 - `pairing.py` — MOV/MP4 pairing: verifies same-stem files via `ffprobe`
   duration/frame-count before trusting either as a stand-in for the other;

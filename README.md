@@ -175,7 +175,16 @@ renaming preview JPEGs, hand-editing the JSON, or both) to disk:
 slate --input-dir ~/Movies/Footage --rename-only --rename-mappings=review/rename_mappings.json
 ```
 
-Before checking anything else, this reconciles `rename_mappings.json` against
+Before anything else, this checks the mapping file's `app_version` field
+(stamped with the `slate` version that wrote it, alongside `groups`, every
+time `rename_mappings.json` is saved) against the version currently
+running. A different **major** version means `slate` refuses to proceed,
+with a colorized error, rather than risk misreading a mapping file whose
+format may have changed -- re-run `--dry-run` to regenerate it. A missing
+`app_version` (an older file, or a hand-created one) is treated as
+compatible, not as a mismatch.
+
+This also reconciles `rename_mappings.json` against
 the rest of `review/`: any preview JPEG a human renamed is matched back to
 its entry by content hash (not filename), and its on-disk name becomes the
 new `new_stem`. A preview JPEG that's gone missing (deleted rather than

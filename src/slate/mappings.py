@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from importlib.metadata import version as _pkg_version
 from pathlib import Path
 from typing import Any
 
 # See "Workflow Modes" (Phase 1 steps 2, 4, 7) in PROJECT_SPEC.md.
+
+APP_VERSION = _pkg_version("slate")
 
 
 @dataclass
@@ -45,17 +48,38 @@ class MappingEntry:
         )
 
 
-def load_mappings(path: Path) -> list[MappingEntry]:
+def _load_raw(path: Path) -> dict[str, Any] | list[Any]:
     if not path.is_file():
-        return []
+        return {}
     with path.open() as f:
-        data = json.load(f)
-    return [MappingEntry.from_dict(d) for d in data]
+        return json.load(f)
+
+
+def read_app_version(path: Path) -> str | None:
+    """The app_version a mapping file was written with, or None if the file
+    doesn't exist, predates this field, or was hand-created without one."""
+    data = _load_raw(path)
+    return data.get("app_version") if isinstance(data, dict) else None
+
+
+def major_version_mismatch(file_version: str, running_version: str) -> bool:
+    return file_version.split(".")[0] != running_version.split(".")[0]
+
+
+def load_mappings(path: Path) -> list[MappingEntry]:
+    data = _load_raw(path)
+    # A bare list is the pre-app_version file format -- still readable.
+    groups = data.get("groups", []) if isinstance(data, dict) else data
+    return [MappingEntry.from_dict(d) for d in groups]
 
 
 def save_mappings(path: Path, entries: list[MappingEntry]) -> None:
+    data = {
+        "app_version": APP_VERSION,
+        "groups": [e.to_dict() for e in entries],
+    }
     with path.open("w") as f:
-        json.dump([e.to_dict() for e in entries], f, indent=2)
+        json.dump(data, f, indent=2)
         f.write("\n")
 
 

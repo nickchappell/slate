@@ -14,10 +14,13 @@ from slate.extraction import ExtractionError, extract_frame
 from slate.filenames import assemble_stem, normalize_caption, truncate_caption
 from slate.inference import check_for_model_updates, generate_caption
 from slate.mappings import (
+    APP_VERSION,
     MappingEntry,
     disambiguate,
     find_existing_match,
     load_mappings,
+    major_version_mismatch,
+    read_app_version,
     save_mappings,
     sort_key,
 )
@@ -312,6 +315,27 @@ def _run_preflight_or_exit() -> None:
         sys.exit(1)
 
 
+def _check_mapping_version_or_exit(mappings_path: Path) -> None:
+    # A missing app_version (no file yet, or a file predating this field) is
+    # treated as compatible -- only a *known* major-version difference is
+    # grounds to refuse, since the mapping file format is what's actually at
+    # risk of having changed underneath it.
+    file_version = read_app_version(mappings_path)
+    if file_version is None:
+        return
+    if major_version_mismatch(file_version, APP_VERSION):
+        output.fatal(
+            f"{mappings_path} was written by slate v{file_version}, but this "
+            f"is v{APP_VERSION} -- a major version apart. Its format may be "
+            "incompatible with this version of slate."
+        )
+        output.fatal(
+            "Re-run --dry-run to regenerate it, or verify compatibility "
+            "by hand before proceeding."
+        )
+        sys.exit(1)
+
+
 # --- Phase 1: --dry-run --------------------------------------------------
 
 
@@ -330,6 +354,7 @@ def run_phase1(
 ) -> tuple[list[MappingEntry], list[MappingEntry], list[MappingEntry]]:
     """Returns (all_entries, new_entries, skipped_entries)."""
     groups = build_groups(files)
+    _check_mapping_version_or_exit(mappings_path)
     existing = load_mappings(mappings_path)
 
     all_entries: list[MappingEntry] = []
@@ -654,6 +679,7 @@ def main(argv: list[str] | None = None) -> None:
 
         elif args.rename_only:
             base_dir = args.input_dir if args.input_dir else Path.cwd()
+            _check_mapping_version_or_exit(args.rename_mappings)
             entries = load_mappings(args.rename_mappings)
             run_phase2(
                 entries,

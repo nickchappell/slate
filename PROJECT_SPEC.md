@@ -622,33 +622,34 @@ that skips the review checkpoint — see Phase 3 below.
 7. Write a mapping file, `review/rename_mappings.json` — living inside
    `review/` itself, alongside the preview JPEGs it describes, not as a
    sibling of that folder (JSON preferred over YAML — no extra dependency,
-   easily diffable/greppable). Structure is a **list of groups**, not a flat
-   old→new dict, since a MOV/MP4 pair maps to one shared new stem.
-   `preview_jpeg` is stored as a bare filename (e.g.
-   `"waves crashing on rocky shore.jpg"`), resolved relative to
-   `rename_mappings.json`'s own directory — the two are always siblings:
+   easily diffable/greppable). Top level is an object, not a bare list, so
+   the mapping file's own format version can be stamped alongside the
+   groups it contains (see "Mapping File Version Check," below):
 
 ```json
-[
-  {
-    "status": "ok",
-    "original_files": [
-      "A017_C010_0806GC AMBIENCE-SEASIDE - Long Wharf - Boston, MA.MOV",
-      "A017_C010_0806GC AMBIENCE-SEASIDE - Long Wharf - Boston, MA.MP4"
-    ],
-    "new_stem": "A017_C010_0806GC AMBIENCE-SEASIDE - Long Wharf - Boston, MA waves crashing on rocky shore",
-    "preview_jpeg": "A017_C010_0806GC ... waves crashing on rocky shore.jpg",
-    "preview_jpeg_sha256": "b2c1...e4f0",
-    "source_used_for_caption": "...MP4"
-  },
-  {
-    "status": "error",
-    "original_files": [
-      "A017_C020_0806XX.MOV"
-    ],
-    "error": "ffmpeg and qlmanage both failed to decode a frame"
-  }
-]
+{
+  "app_version": "0.2.2",
+  "groups": [
+    {
+      "status": "ok",
+      "original_files": [
+        "A017_C010_0806GC AMBIENCE-SEASIDE - Long Wharf - Boston, MA.MOV",
+        "A017_C010_0806GC AMBIENCE-SEASIDE - Long Wharf - Boston, MA.MP4"
+      ],
+      "new_stem": "A017_C010_0806GC AMBIENCE-SEASIDE - Long Wharf - Boston, MA waves crashing on rocky shore",
+      "preview_jpeg": "A017_C010_0806GC ... waves crashing on rocky shore.jpg",
+      "preview_jpeg_sha256": "b2c1...e4f0",
+      "source_used_for_caption": "...MP4"
+    },
+    {
+      "status": "error",
+      "original_files": [
+        "A017_C020_0806XX.MOV"
+      ],
+      "error": "ffmpeg and qlmanage both failed to decode a frame"
+    }
+  ]
+}
 ```
 
 Every group has a `status` of `"ok"` or `"error"`. An `"error"` group has
@@ -716,6 +717,44 @@ silently dropped. Two distinct things produce an `"error"` group:
      considered and deliberately left out of scope: between this summary
      and the `SKIP` lines already printed per group, the common case
      (adding new footage to a folder) is fully covered without it.
+
+### Mapping File Version Check
+
+Applies every time a mapping file is loaded — Phase 1 step 2's carried-over
+lookup and Phase 2 step 0's `--rename-mappings` load both go through it,
+before anything else happens.
+
+`review/rename_mappings.json`'s `app_version` field (step 7, above) is
+stamped from the currently-*running* `slate`'s own version
+(`importlib.metadata.version("slate")`, which reads what the installed
+package's build backend recorded from `pyproject.toml` — not a value the
+caller supplies) every time the file is written, in both Phase 1 and
+Phase 2. On load, that stamped version is compared against the running
+version:
+
+- **Different major version** (the first `X` in `X.Y.Z`) — refuse to
+  proceed. The mapping file's *format* is what's actually at risk across a
+  major bump, not just its data, so blindly trusting it could misinterpret
+  fields that changed meaning or silently drop ones that were removed.
+  Fail loudly with a colorized (`output.fatal`, red) message naming both
+  versions and suggesting a fresh `--dry-run`, then exit non-zero —
+  matching the existing preflight-check failure pattern
+  (`_run_preflight_or_exit`), not a soft warning that's easy to miss.
+- **Same major version** (minor/patch may differ freely) — proceed
+  normally; no message.
+- **No `app_version` at all** — a file that predates this field, or one
+  hand-created without it — treated as compatible, not as an
+  automatic mismatch. There's no version to compare against, and
+  retroactively failing every already-existing mapping file the moment
+  this check shipped would be worse than the problem it's meant to catch.
+  (`load_mappings` itself also still reads the older bare-list file format
+  — `[{...}, {...}]` instead of `{"app_version": ..., "groups": [...]}` —
+  for the same reason.)
+
+This is deliberately coarse (major version only, not minor/patch) since
+`slate`'s own versioning already reserves major bumps for breaking changes
+(see the release process in `CLAUDE.md`) — a minor/patch difference is
+expected to keep reading old mapping files fine.
 
 ### Phase 2: `--rename-only --rename-mappings=review/rename_mappings.json`
 

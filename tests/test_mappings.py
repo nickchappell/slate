@@ -1,8 +1,13 @@
+import json
+
 from slate.mappings import (
+    APP_VERSION,
     MappingEntry,
     disambiguate,
     find_existing_match,
     load_mappings,
+    major_version_mismatch,
+    read_app_version,
     save_mappings,
     sort_key,
 )
@@ -53,6 +58,50 @@ class TestLoadSaveMappings:
         ]
         save_mappings(path, entries)
         assert load_mappings(path) == entries
+
+    def test_save_stamps_current_app_version_and_wraps_groups(self, tmp_path):
+        path = tmp_path / "mappings.json"
+        entries = [
+            MappingEntry(status="ok", original_files=["a.MOV"], new_stem="a caption")
+        ]
+        save_mappings(path, entries)
+        data = json.loads(path.read_text())
+        assert data["app_version"] == APP_VERSION
+        assert data["groups"][0]["new_stem"] == "a caption"
+
+    def test_load_still_reads_pre_app_version_bare_list_format(self, tmp_path):
+        path = tmp_path / "mappings.json"
+        path.write_text(
+            json.dumps([{"status": "ok", "original_files": ["a.MOV"], "new_stem": "a"}])
+        )
+        entries = load_mappings(path)
+        assert entries == [
+            MappingEntry(status="ok", original_files=["a.MOV"], new_stem="a")
+        ]
+
+
+class TestAppVersion:
+    def test_missing_file_has_no_version(self, tmp_path):
+        assert read_app_version(tmp_path / "nonexistent.json") is None
+
+    def test_reads_the_stamped_version(self, tmp_path):
+        path = tmp_path / "mappings.json"
+        save_mappings(path, [])
+        assert read_app_version(path) == APP_VERSION
+
+    def test_pre_app_version_bare_list_format_has_no_version(self, tmp_path):
+        path = tmp_path / "mappings.json"
+        path.write_text("[]")
+        assert read_app_version(path) is None
+
+    def test_same_major_is_not_a_mismatch(self):
+        assert major_version_mismatch("0.2.2", "0.9.0") is False
+
+    def test_different_major_is_a_mismatch(self):
+        assert major_version_mismatch("0.2.2", "1.0.0") is True
+
+    def test_mismatch_is_order_independent(self):
+        assert major_version_mismatch("1.0.0", "0.2.2") is True
 
 
 class TestFindExistingMatch:
