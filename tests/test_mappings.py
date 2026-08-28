@@ -15,6 +15,7 @@ class TestMappingEntryDictConversion:
             original_files=["a.MOV", "a.MP4"],
             new_stem="a caption",
             preview_jpeg="review/a caption.jpg",
+            preview_jpeg_sha256="deadbeef",
             source_used_for_caption="a.MP4",
         )
         assert MappingEntry.from_dict(entry.to_dict()) == entry

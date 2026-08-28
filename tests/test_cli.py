@@ -11,7 +11,8 @@ from slate.cli import (
     build_parser,
 )
 from slate.config import CONFIG_ENV_VAR
-from slate.mappings import MappingEntry
+from slate.mappings import MappingEntry, load_mappings
+from slate.review_sync import hash_file
 
 
 def touch(path):
@@ -305,3 +306,71 @@ class TestRunPhase2:
         assert mappings_path.is_file()
         assert not (tmp_path / "review").exists()
         assert list(tmp_path.glob("undo_renames_*.sh")) == []
+
+
+class TestRunPhase2ReviewSync:
+    """Phase 2 reconciles rename_mappings.json against human renames of
+    preview JPEGs in review/ before building the rename plan -- see
+    review_sync.sync_from_review."""
+
+    def test_renamed_preview_jpeg_drives_the_actual_rename(self, tmp_path):
+        touch(tmp_path / "a.MOV")
+        review_dir = tmp_path / "review"
+        review_dir.mkdir()
+        review_dir.joinpath("renamed by human.jpg").write_bytes(b"frame")
+        preview_sha256 = hash_file(review_dir / "renamed by human.jpg")
+
+        mappings_path = tmp_path / "rename_mappings.json"
+        mappings_path.write_text("[]")
+        entries = [
+            MappingEntry(
+                status="ok",
+                original_files=["a.MOV"],
+                new_stem="original caption",
+                preview_jpeg="review/original caption.jpg",
+                preview_jpeg_sha256=preview_sha256,
+            )
+        ]
+
+        cli.run_phase2(
+            entries,
+            tmp_path,
+            mappings_path,
+            generate_undo_script=False,
+            assume_yes=True,
+        )
+
+        assert (tmp_path / "renamed by human.MOV").is_file()
+        assert not (tmp_path / "original caption.MOV").exists()
+
+        applied_files = list((tmp_path / "review").glob("applied_renames_*.json"))
+        applied_entries = load_mappings(applied_files[0])
+        assert applied_entries[0].new_stem == "renamed by human"
+
+    def test_deleted_preview_jpeg_skips_that_groups_rename(self, tmp_path):
+        touch(tmp_path / "a.MOV")
+        review_dir = tmp_path / "review"
+        review_dir.mkdir()  # preview JPEG deliberately absent
+
+        mappings_path = tmp_path / "rename_mappings.json"
+        mappings_path.write_text("[]")
+        entries = [
+            MappingEntry(
+                status="ok",
+                original_files=["a.MOV"],
+                new_stem="original caption",
+                preview_jpeg="review/original caption.jpg",
+                preview_jpeg_sha256="deadbeef",
+            )
+        ]
+
+        cli.run_phase2(
+            entries,
+            tmp_path,
+            mappings_path,
+            generate_undo_script=False,
+            assume_yes=True,
+        )
+
+        assert (tmp_path / "a.MOV").is_file()
+        assert not (tmp_path / "original caption.MOV").exists()

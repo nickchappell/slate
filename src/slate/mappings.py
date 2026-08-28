@@ -14,6 +14,7 @@ class MappingEntry:
     original_files: list[str]
     new_stem: str | None = None
     preview_jpeg: str | None = None
+    preview_jpeg_sha256: str | None = None
     source_used_for_caption: str | None = None
     error: str | None = None
 
@@ -25,6 +26,7 @@ class MappingEntry:
         if self.status == "ok":
             d["new_stem"] = self.new_stem
             d["preview_jpeg"] = self.preview_jpeg
+            d["preview_jpeg_sha256"] = self.preview_jpeg_sha256
             d["source_used_for_caption"] = self.source_used_for_caption
         else:
             d["error"] = self.error
@@ -37,6 +39,7 @@ class MappingEntry:
             original_files=list(d["original_files"]),
             new_stem=d.get("new_stem"),
             preview_jpeg=d.get("preview_jpeg"),
+            preview_jpeg_sha256=d.get("preview_jpeg_sha256"),
             source_used_for_caption=d.get("source_used_for_caption"),
             error=d.get("error"),
         )

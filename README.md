@@ -143,11 +143,20 @@ captioned preview JPEGs. **Never renames or modifies your source files.**
 slate --input-dir ~/Movies/Footage --dry-run
 ```
 
-`rename_mappings.json` is meant to be hand-edited -- fix a bad caption, or delete an
-entry to force it to be reprocessed on the next `--dry-run`. Re-running
+Review by renaming the JPEGs themselves in `review/` -- each preview is
+already named after its proposed caption, so correcting one is a matter of
+renaming `review/waves crashing on rocky shore.jpg` to `review/sunset over
+the harbor.jpg` in Finder (or any batch-rename tool). `--rename-only` picks
+up JPEG renames automatically the next time it runs (see Phase 2, below).
+Deleting a preview JPEG instead of renaming it tells `--rename-only` to skip
+that group entirely.
+
+`rename_mappings.json` can also be hand-edited directly -- fix a bad caption
+in `new_stem`, or delete an entry to force it to be reprocessed on the next
+`--dry-run` -- for anything a JPEG rename can't express. Re-running
 `--dry-run` on the same folder is safe and incremental: groups already
-present in `rename_mappings.json` are skipped (printed as `SKIP`) and carried over
-unchanged, so hand edits survive a re-run.
+present in `rename_mappings.json` are skipped (printed as `SKIP`) and carried
+over unchanged, so edits from either path survive a re-run.
 
 Instead of a whole directory, you can operate on an explicit list of files
 -- nothing else in the directory is touched or even looked at:
@@ -158,19 +167,27 @@ slate --input-files clip1.MOV clip1.MP4 clip2.MP4 --dry-run
 
 ### Phase 2 -- `--rename-only`
 
-Applies a previously-reviewed (and optionally hand-edited) `rename_mappings.json` to
-disk:
+Applies a previously-reviewed `rename_mappings.json` (reviewed by renaming
+preview JPEGs, hand-editing the JSON, or both) to disk:
 
 ```bash
 slate --input-dir ~/Movies/Footage --rename-only --rename-mappings=rename_mappings.json
 ```
 
-Before renaming anything, this checks that every file still exists (files
-may have moved or been deleted since the dry-run), warns and skips any group
-with a missing pairing partner, and checks for destination-name collisions --
-reporting every problem up front rather than failing partway through a
-batch. You'll be prompted to confirm before anything is renamed, unless
-`--yes`/`-y` is passed.
+Before checking anything else, this reconciles `rename_mappings.json` against
+`review/`: any preview JPEG a human renamed is matched back to its entry by
+content hash (not filename), and its on-disk name becomes the new `new_stem`.
+A preview JPEG that's gone missing (deleted rather than renamed) causes that
+group to be skipped, with a warning. A JPEG rename takes precedence over
+`new_stem` if the two happen to disagree; if a JPEG was never touched, a
+direct hand-edit to `new_stem` in the JSON is respected as-is.
+
+Then, before renaming anything, this checks that every file still exists
+(files may have moved or been deleted since the dry-run), warns and skips any
+group with a missing pairing partner, and checks for destination-name
+collisions -- reporting every problem up front rather than failing partway
+through a batch. You'll be prompted to confirm before anything is renamed,
+unless `--yes`/`-y` is passed.
 
 After a successful run, `rename_mappings.json` is renamed into
 `review/applied_renames_<timestamp>.json` as an audit trail (a sibling of
@@ -183,7 +200,7 @@ correlates the two files even though they live in different places.
 ### Phase 3 -- `--process-and-rename`
 
 Runs Phase 1 and Phase 2 back-to-back in one invocation, skipping the pause
-for hand-editing `rename_mappings.json` in between:
+for reviewing/correcting captions (by JPEG rename or JSON edit) in between:
 
 ```bash
 slate --input-dir ~/Movies/Footage --process-and-rename

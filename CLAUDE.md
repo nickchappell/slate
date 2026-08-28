@@ -65,9 +65,11 @@ with a human review checkpoint in between:
   groups, not renaming anything). Re-running `--dry-run` is safe/incremental:
   groups already present (matched by `original_files`) are skipped and
   carried over unchanged, regardless of prior `status`.
-- **`--rename-only --rename-mappings=rename_mappings.json`** — re-checks
-  every file still exists, confirms, then applies the renames from a
-  (possibly hand-edited) mapping file. Writes an audit trail
+- **`--rename-only --rename-mappings=rename_mappings.json`** — first
+  reconciles the mapping against any preview JPEGs a human renamed in
+  `review/` (see `review_sync.py`), then re-checks every file still exists,
+  confirms, and applies the renames from the (possibly hand-edited, in JSON
+  and/or by renaming JPEGs) mapping file. Writes an audit trail
   (`review/applied_renames_<timestamp>.json`) and, by default, an undo
   script (`undo_renames_<timestamp>.sh`).
 - **`--process-and-rename`** — runs both phases in one invocation, skipping
@@ -101,6 +103,10 @@ Module layout under `src/slate/`:
 - `preflight.py` — startup platform/binary checks, all run and reported
   together rather than failing at the first problem
 - `rename.py` — rename plan/execution, audit trail, undo script generation
+- `review_sync.py` — reconciles `rename_mappings.json` against human renames
+  of preview JPEGs in `review/`, via each JPEG's SHA-256 (a plain rename
+  doesn't touch file bytes, so the hash survives it); runs at the start of
+  Phase 2
 
 ## Conventions
 

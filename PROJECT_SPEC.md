@@ -624,6 +624,7 @@ that skips the review checkpoint — see Phase 3 below.
     ],
     "new_stem": "A017_C010_0806GC AMBIENCE-SEASIDE - Long Wharf - Boston, MA waves crashing on rocky shore",
     "preview_jpeg": "review/A017_C010_0806GC ... waves crashing on rocky shore.jpg",
+    "preview_jpeg_sha256": "b2c1...e4f0",
     "source_used_for_caption": "...MP4"
   },
   {
@@ -654,6 +655,23 @@ silently dropped. Two distinct things produce an `"error"` group:
    workflow. (Step 2, above, is what makes this safe across a re-run: hand
    edits to an entry survive as long as `original_files` for that group is
    unchanged.)
+   - **Reviewing by renaming the preview JPEG is the other supported path**,
+     and the more intuitive one for a human: since step 6 already names the
+     JPEG after the proposed `new_stem`, correcting a caption can mean
+     renaming `review/waves crashing on rocky shore.jpg` to `review/sunset
+     over the harbor.jpg` in Finder (or any file manager/batch-rename tool)
+     instead of hand-editing JSON text. `preview_jpeg_sha256` (the frame's
+     SHA-256, computed once right after step 6 writes the file) is what
+     makes this reconcilable despite happening out of band of the script —
+     a plain rename never touches file bytes, so the hash is a durable link
+     back to the JSON entry regardless of what the file is named when
+     `--rename-only` next runs (Phase 2 step 0, below). The two review
+     paths compose: an entry a human never touched (JSON or JPEG) carries
+     both forward unchanged; if only the JPEG was renamed, the JPEG's name
+     wins as the source of truth for `new_stem`; if only the JSON's
+     `new_stem` was hand-edited, the JPEG's hash still matches its
+     (unrenamed) file, so there's nothing to reconcile and the hand-edit
+     stands.
 9. **Print a run-level summary** to the console once `rename_mappings.json` has
    been written, so re-running `--dry-run` on a folder gives an
    at-a-glance answer to "what did this run actually do?" without having
@@ -687,6 +705,31 @@ silently dropped. Two distinct things produce an `"error"` group:
 
 ### Phase 2: `--rename-only --rename-mappings=rename_mappings.json`
 
+0. **Sync `new_stem` from any renamed preview JPEGs first** (`review_sync.
+   sync_from_review`, Phase 1 step 8's other review path) — before anything
+   else in this phase runs:
+   - Hash every `.jpg` in `review/` and match it against each `"ok"`
+     entry's recorded `preview_jpeg_sha256`. A match whose current filename
+     differs from the entry's `new_stem` means a human renamed it — update
+     `new_stem`/`preview_jpeg` from the on-disk name. Entries whose JPEG
+     hash isn't found in `review/` at all are left untouched but excluded
+     from this run's rename plan and reported (e.g. `WARNING: skipping
+     rename for "...": preview JPEG no longer found in review/ (deleted?)`)
+     — deleting a preview JPEG is how a human says "don't rename this one,"
+     without needing to hand-edit the JSON.
+   - Entries with no recorded `preview_jpeg_sha256` (mapping files written
+     before this field existed) are skipped by sync entirely — same
+     behavior as today, hand-editing the JSON is still fully supported.
+   - If two entries' preview JPEGs are byte-identical (rare — e.g. two
+     genuinely identical frames), a hash match is ambiguous: warn and leave
+     both untouched rather than guess which one a renamed file belongs to.
+   - If the sync step changed anything, `rename_mappings.json` is
+     rewritten immediately (before the rest of Phase 2 runs) so the audit
+     trail written at the end of this phase reflects what was actually
+     applied, not the pre-sync state.
+   - Two humans-renamed JPEGs landing on the same target name doesn't need
+     special handling here — it's caught by the ordinary destination
+     collision check in step 2 below, same as any other collision.
 1. Skip extraction/captioning entirely — load the JSON directly.
 2. **Pre-flight check before renaming anything:**
    - Skip `"error"` groups entirely — there's no `new_stem` to rename to.

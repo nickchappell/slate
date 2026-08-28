@@ -30,6 +30,7 @@ from slate.rename import (
     write_audit_trail,
     write_undo_script,
 )
+from slate.review_sync import hash_file, sync_from_review
 
 
 class UsageError(Exception):
@@ -384,12 +385,14 @@ def run_phase1(
         preview_name = f"{new_stem}.jpg"
         preview_path = review_dir / preview_name
         tmp_frame_path.rename(preview_path)
+        preview_sha256 = hash_file(preview_path)
 
         entry = MappingEntry(
             status="ok",
             original_files=original_files,
             new_stem=new_stem,
             preview_jpeg=str(Path(review_dir.name) / preview_name),
+            preview_jpeg_sha256=preview_sha256,
             source_used_for_caption=group.source_file.name,
         )
         new_entries.append(entry)
@@ -455,7 +458,33 @@ def run_phase2(
     assume_yes: bool,
     phase3_newly_processed_ok: list[MappingEntry] | None = None,
 ) -> None:
-    plan = build_rename_plan(entries, base_dir)
+    review_dir = mappings_path.parent / "review"
+    sync_result = sync_from_review(entries, review_dir)
+
+    if sync_result.renamed:
+        save_mappings(mappings_path, entries)
+        for entry in sync_result.renamed:
+            output.ok(
+                f"Synced from review/: {' / '.join(entry.original_files)} -> "
+                f"{entry.new_stem}"
+            )
+    for digest in sync_result.ambiguous_hashes:
+        output.warn(
+            f"WARNING: multiple groups share an identical preview JPEG "
+            f"(hash {digest[:12]}...) -- skipping review/ sync for those "
+            "groups; resolve manually in rename_mappings.json."
+        )
+    for entry in sync_result.deleted:
+        output.warn(
+            f'WARNING: skipping rename for "{entry.new_stem}": preview JPEG '
+            "no longer found in review/ (deleted?) -- restore it, or edit "
+            "rename_mappings.json directly, then re-run."
+        )
+
+    deleted_ids = {id(e) for e in sync_result.deleted}
+    plan_entries = [e for e in entries if id(e) not in deleted_ids]
+
+    plan = build_rename_plan(plan_entries, base_dir)
 
     if plan.error_group_count:
         output.warn(
