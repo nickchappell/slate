@@ -5,8 +5,32 @@ generically-named raw camera video files (e.g. `A017_C015_0806GQ.MOV`) using
 a local vision-language model -- no cloud dependency after the model weights
 are downloaded once.
 
-Personal-use tool, **Apple Silicon Macs only**. See `PROJECT_SPEC.md` for the
-full design.
+Personal-use tool. See `PROJECT_SPEC.md` for the full design.
+
+> [!IMPORTANT]
+> **Apple Silicon Macs only.** `mlx-vlm` doesn't run anywhere else, and
+> ProRes RAW frame extraction depends on macOS-only frameworks. `slate`
+> checks this at startup and refuses to run elsewhere rather than failing
+> with a cryptic import error.
+
+## Table of Contents
+
+- [Getting Started](#getting-started)
+- [Installation](#installation)
+  - [Prerequisites](#prerequisites)
+  - [Installing `slate` onto your `$PATH`](#installing-slate-onto-your-path)
+  - [Model weights (first-run download)](#model-weights-first-run-download)
+- [Usage](#usage)
+  - [Phase 1 -- `--dry-run`](#phase-1------dry-run)
+  - [Phase 2 -- `--rename-only`](#phase-2------rename-only)
+  - [Phase 3 -- `--process-and-rename`](#phase-3------process-and-rename)
+  - [Other flags](#other-flags)
+- [Under the Hood](#under-the-hood)
+- [Development](#development)
+  - [Cutting a release](#cutting-a-release)
+- [Tests](#tests)
+- [Linting & Formatting](#linting--formatting)
+- [Technical Decisions and Opinions](#technical-decisions-and-opinions)
 
 ## Getting Started
 
@@ -80,9 +104,11 @@ uv tool install --reinstall .
 `mlx-community/Qwen2-VL-2B-Instruct-4bit` (~1.5GB) locally. Model resolution
 goes through `huggingface_hub`'s standard cache, not anything `slate`-specific:
 
-- **First run** with a given model requires network access to download its
-  weights. This is the one exception to "no cloud dependency" -- every run
-  after that is fully local.
+> [!NOTE]
+> **First run** with a given model requires network access to download its
+> weights. This is the one exception to "no cloud dependency" -- every run
+> after that is fully local.
+
 - **Cached at** `~/.cache/huggingface/hub/`, shared with any other tool that
   uses the same Hugging Face repo ID (LM Studio, other `mlx-vlm` scripts,
   `transformers`, etc.) -- `slate` doesn't keep a private copy.
@@ -156,13 +182,14 @@ for hand-editing `rename_mappings.json` in between:
 slate --input-dir ~/Movies/Footage --process-and-rename
 ```
 
-This bypasses the human caption-review checkpoint that's the whole point of
-the two-phase split, so it's meant for batches where you've already
-validated the prompt/model on a sample of the footage -- not as the default
-way to run the tool on footage you haven't captioned with this model/prompt
-before. Because there's no review step, its confirmation prompt (still
-skippable with `--yes`/`-y`) shows a sample of the actual generated captions,
-not just an operation count.
+> [!WARNING]
+> This bypasses the human caption-review checkpoint that's the whole point
+> of the two-phase split, so it's meant for batches where you've already
+> validated the prompt/model on a sample of the footage -- **not** as the
+> default way to run the tool on footage you haven't captioned with this
+> model/prompt before. Because there's no review step, its confirmation
+> prompt (still skippable with `--yes`/`-y`) shows a sample of the actual
+> generated captions, not just an operation count.
 
 ### Other flags
 
@@ -231,6 +258,55 @@ implement video decoding, image processing, or caption generation itself:
    just at the end), so a mid-batch crash still leaves a clear, undo-able
    record of what actually succeeded.
 
+## Development
+
+A `Makefile` wraps the `uv`/`ruff`/`pytest`/`gh` commands used below into
+short, memorable targets. Run `make help` for the full list -- it prints a
+runnable example under every target.
+
+```bash
+make install          # uv sync -- install project + dev dependencies
+make run ARGS='--dry-run --input-dir footage'   # uv run slate ...
+make lint              # uv run ruff check .
+make format            # uv run ruff format .
+make test              # unit tests only (see "Tests," below)
+make test-integration  # integration tests only (see "Tests," below)
+make check             # lint + format-check + test, in one shot
+```
+
+`make check` is the pre-commit sanity check -- run it before considering a
+change done, same bar as CI would apply.
+
+### Cutting a release
+
+Three targets automate versioning and publishing, built on `uv version` and
+the `gh` CLI:
+
+> [!IMPORTANT]
+> `create-release` pushes your current branch and the new tag to `origin`
+> and creates a public GitHub release -- these are visible, shared-state
+> actions, not local/reversible ones. Make sure you actually want to ship
+> before running it.
+
+```bash
+make bump-version PART=patch   # or minor / major -- default is patch
+make github-release            # create a GitHub release for the current tag
+make create-release PART=minor # bump-version, push, then github-release
+```
+
+- `bump-version` refuses to run on a dirty working tree. It bumps the
+  version in `pyproject.toml` (via `uv version --bump`), commits
+  `pyproject.toml`/`uv.lock`, and creates a `vX.Y.Z` git tag -- but doesn't
+  push. Whether the commit/tag end up GPG-signed depends entirely on your
+  own `git config` (`commit.gpgsign`/`tag.gpgsign`), not on the Makefile.
+- `github-release` checks that `gh` is installed and authenticated
+  (`gh auth status`), then runs `gh release create --verify-tag
+  --generate-notes` for the current version's tag. `--verify-tag`
+  deliberately makes it fail if that tag hasn't been pushed to `origin`
+  yet, rather than letting `gh` create a new tag against the wrong commit.
+- `create-release` is the end-to-end version: `bump-version`, then
+  `git push` (branch + tag), then `github-release`.
+
 ## Tests
 
 The suite is split into two layers -- fast mocked unit tests, and slower
@@ -260,9 +336,12 @@ representative samples is enough, not a full camera dump) into:
 tests/fixtures/footage/
 ```
 
-This is already covered by the repo's `.gitignore` (which excludes all
-`*.MOV`/`*.mp4` files anywhere in the tree), so anything placed there never
-gets committed regardless of size. Then run:
+> [!TIP]
+> This is already covered by the repo's `.gitignore` (which excludes all
+> `*.MOV`/`*.mp4` files anywhere in the tree), so anything placed there
+> never gets committed regardless of size.
+
+Then run:
 
 ```bash
 uv run pytest -m integration
