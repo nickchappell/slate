@@ -1,5 +1,5 @@
 .PHONY: help install sync lint lint-fix format format-check test test-unit test-integration \
-	check run update outdated lock bump-version clean
+	check run update outdated lock bump-version github-release create-release clean
 
 # Used by bump-version; override with e.g. `make bump-version PART=minor`.
 PART ?= patch
@@ -43,6 +43,12 @@ help:
 	@printf "  $(CYAN)bump-version$(RESET)     Bump pyproject.toml version, commit, and tag it\n"
 	@printf "                   $(YELLOW)(PART=patch|minor|major, default patch)$(RESET)\n"
 	@printf "                   $(GREEN)e.g. make bump-version PART=minor$(RESET)\n"
+	@printf "  $(CYAN)github-release$(RESET)   Create a GitHub release for the current version's tag\n"
+	@printf "                   $(YELLOW)(requires the tag to already be pushed to origin)$(RESET)\n"
+	@printf "                   $(GREEN)e.g. make github-release$(RESET)\n"
+	@printf "  $(CYAN)create-release$(RESET)   bump-version, push it, then github-release, end to end\n"
+	@printf "                   $(YELLOW)(PART=patch|minor|major, default patch)$(RESET)\n"
+	@printf "                   $(GREEN)e.g. make create-release PART=minor$(RESET)\n"
 	@printf "  $(CYAN)clean$(RESET)            Remove caches and build artifacts\n"
 	@printf "                   $(GREEN)e.g. make clean$(RESET)\n"
 
@@ -93,6 +99,26 @@ bump-version:
 	git commit -m "Bump version to $$NEW_VERSION"; \
 	git tag "v$$NEW_VERSION"; \
 	printf "$(GREEN)Tagged v$$NEW_VERSION$(RESET) -- push with: $(CYAN)git push && git push origin v$$NEW_VERSION$(RESET)\n"
+
+github-release:
+	@if ! command -v gh >/dev/null 2>&1; then \
+		printf "$(RED)gh CLI not found -- install it first (e.g. brew install gh).$(RESET)\n" >&2; \
+		exit 1; \
+	fi
+	@if ! gh auth status >/dev/null 2>&1; then \
+		printf "$(RED)gh is not authenticated -- run 'gh auth login' first.$(RESET)\n" >&2; \
+		exit 1; \
+	fi
+	@TAG="v$$(uv version --short)"; \
+	printf "$(BOLD)Creating GitHub release $(CYAN)$$TAG$(RESET)$(BOLD)...$(RESET)\n"; \
+	gh release create "$$TAG" --verify-tag --generate-notes --title "$$TAG" \
+		|| { printf "$(RED)Release failed -- has tag $$TAG been pushed? Try: git push origin $$TAG$(RESET)\n" >&2; exit 1; }
+
+create-release: bump-version
+	@TAG="v$$(uv version --short)"; \
+	printf "$(BOLD)Pushing $(CYAN)$$TAG$(RESET)$(BOLD) to origin...$(RESET)\n"; \
+	git push && git push origin "$$TAG"
+	$(MAKE) github-release
 
 clean:
 	rm -rf .pytest_cache .ruff_cache build dist *.egg-info
