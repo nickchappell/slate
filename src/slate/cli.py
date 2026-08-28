@@ -331,6 +331,7 @@ def run_phase1(
     all_entries: list[MappingEntry] = []
     new_entries: list[MappingEntry] = []
     skipped_entries: list[MappingEntry] = []
+    pending_previews: dict[int, Path] = {}  # id(entry) -> its still-tmp-named frame
 
     review_dir.mkdir(parents=True, exist_ok=True)
 
@@ -382,26 +383,37 @@ def run_phase1(
             max_length=max_file_name_length,
         )
 
-        preview_name = f"{new_stem}.jpg"
-        preview_path = review_dir / preview_name
-        tmp_frame_path.rename(preview_path)
-        preview_sha256 = hash_file(preview_path)
+        # Note: not yet renamed to its new_stem-based name -- two clips
+        # processed in *this same run* can coincidentally assemble to the
+        # identical name (e.g. stem "a" + caption "b c" and stem "a b" +
+        # caption "c" both assemble to "a b c"), and disambiguate() hasn't
+        # run yet to tell them apart. Renaming straight to `preview_name`
+        # here would let the second one silently overwrite the first's
+        # preview file on disk. Stay at the (per-group, always-unique)
+        # tmp name until every entry's final new_stem is settled, below.
+        preview_sha256 = hash_file(tmp_frame_path)
 
         entry = MappingEntry(
             status="ok",
             original_files=original_files,
             new_stem=new_stem,
-            preview_jpeg=str(Path(review_dir.name) / preview_name),
+            preview_jpeg=None,
             preview_jpeg_sha256=preview_sha256,
             source_used_for_caption=group.source_file.name,
         )
+        pending_previews[id(entry)] = tmp_frame_path
         new_entries.append(entry)
         all_entries.append(entry)
         output.ok(f"{' / '.join(original_files)} -> {new_stem}")
 
     disambiguated = disambiguate(all_entries)
+
+    # Relocate any carried-over entry a fresh collision just gave a suffix
+    # to *before* newly-processed entries claim their final names below --
+    # otherwise a new entry could write straight into an old entry's
+    # not-yet-vacated on-disk spot.
     for entry in disambiguated:
-        if entry.preview_jpeg is None:
+        if id(entry) in pending_previews or entry.preview_jpeg is None:
             continue
         old_preview_path = mappings_path.parent / entry.preview_jpeg
         new_preview_name = f"{entry.new_stem}.jpg"
@@ -409,6 +421,18 @@ def run_phase1(
         if old_preview_path.is_file():
             old_preview_path.rename(new_preview_path)
         entry.preview_jpeg = str(Path(review_dir.name) / new_preview_name)
+
+    # Now that every entry's new_stem is final (disambiguated, if it needed
+    # to be) and colliding old entries are out of the way, move each newly
+    # processed preview from its tmp name to its real one.
+    for entry in new_entries:
+        if entry.status != "ok":
+            continue
+        tmp_frame_path = pending_previews[id(entry)]
+        preview_name = f"{entry.new_stem}.jpg"
+        preview_path = review_dir / preview_name
+        tmp_frame_path.rename(preview_path)
+        entry.preview_jpeg = str(Path(review_dir.name) / preview_name)
 
     save_mappings(mappings_path, all_entries)
     _print_phase1_summary(all_entries, new_entries, skipped_entries, disambiguated)

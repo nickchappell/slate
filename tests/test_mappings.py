@@ -35,6 +35,7 @@ class TestMappingEntryDictConversion:
         d = entry.to_dict()
         assert "new_stem" not in d
         assert "preview_jpeg" not in d
+        assert "preview_jpeg_sha256" not in d
         assert "source_used_for_caption" not in d
 
 

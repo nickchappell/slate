@@ -159,3 +159,49 @@ class TestSyncFromReview:
         result = sync_from_review([entry], review_dir)
 
         assert result.deleted == [entry]
+
+    def test_only_the_renamed_entry_is_touched_in_a_mixed_batch(self, tmp_path):
+        """One renamed, one untouched, one deleted, all in the same call --
+        each entry's outcome must be independent of the others'."""
+        review_dir = tmp_path / "review"
+        review_dir.mkdir()
+
+        renamed_content = b"renamed-frame"
+        write_jpeg(review_dir / "renamed by human.jpg", renamed_content)
+        renamed_entry = MappingEntry(
+            status="ok",
+            original_files=["a.MOV"],
+            new_stem="original a",
+            preview_jpeg="review/original a.jpg",
+            preview_jpeg_sha256=hash_file(review_dir / "renamed by human.jpg"),
+        )
+
+        untouched_content = b"untouched-frame"
+        write_jpeg(review_dir / "original b.jpg", untouched_content)
+        untouched_entry = MappingEntry(
+            status="ok",
+            original_files=["b.MOV"],
+            new_stem="original b",
+            preview_jpeg="review/original b.jpg",
+            preview_jpeg_sha256=hash_file(review_dir / "original b.jpg"),
+        )
+
+        deleted_entry = MappingEntry(
+            status="ok",
+            original_files=["c.MOV"],
+            new_stem="original c",
+            preview_jpeg="review/original c.jpg",
+            preview_jpeg_sha256="deadbeef",
+        )
+
+        result = sync_from_review(
+            [renamed_entry, untouched_entry, deleted_entry], review_dir
+        )
+
+        assert result.renamed == [renamed_entry]
+        assert renamed_entry.new_stem == "renamed by human"
+
+        assert untouched_entry.new_stem == "original b"
+
+        assert result.deleted == [deleted_entry]
+        assert deleted_entry.new_stem == "original c"

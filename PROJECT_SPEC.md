@@ -610,6 +610,15 @@ that skips the review checkpoint — see Phase 3 below.
 5. Do **not** rename source files.
 6. Write the captioned JPEG to a review folder, using the **proposed new
    filename** — so captions can be visually sanity-checked against the frame.
+   **Implementation note:** the extracted frame is held under a per-group
+   tmp name (unique by construction — one per source stem) until *every*
+   entry in the batch has run through Disambiguation (step 4) and gotten
+   its final `new_stem`, then renamed into place. Two clips processed in
+   the same run can coincidentally assemble to the identical name before
+   disambiguation separates them (e.g. stem `"a"` + caption `"b c"` and
+   stem `"a b"` + caption `"c"` both assemble to `"a b c"`) — writing
+   straight to `<new_stem>.jpg` as each entry is processed would let the
+   second one silently overwrite the first's preview file on disk.
 7. Write a mapping file, `rename_mappings.json` (JSON preferred over YAML — no extra
    dependency, easily diffable/greppable). Structure is a **list of groups**,
    not a flat old→new dict, since a MOV/MP4 pair maps to one shared new stem:

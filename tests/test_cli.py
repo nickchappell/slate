@@ -374,3 +374,131 @@ class TestRunPhase2ReviewSync:
 
         assert (tmp_path / "a.MOV").is_file()
         assert not (tmp_path / "original caption.MOV").exists()
+
+    def test_synced_name_colliding_with_an_unrelated_file_is_skipped_not_applied(
+        self, tmp_path
+    ):
+        """The rename a JPEG-rename resolves to still goes through the
+        ordinary destination-collision check -- sync doesn't get a free
+        pass around it."""
+        touch(tmp_path / "a.MOV")
+        touch(tmp_path / "existing target.MOV")  # unrelated, pre-existing file
+
+        review_dir = tmp_path / "review"
+        review_dir.mkdir()
+        review_dir.joinpath("existing target.jpg").write_bytes(b"frame")
+        preview_sha256 = hash_file(review_dir / "existing target.jpg")
+
+        mappings_path = tmp_path / "rename_mappings.json"
+        mappings_path.write_text("[]")
+        entries = [
+            MappingEntry(
+                status="ok",
+                original_files=["a.MOV"],
+                new_stem="original caption",
+                preview_jpeg="review/original caption.jpg",
+                preview_jpeg_sha256=preview_sha256,
+            )
+        ]
+
+        cli.run_phase2(
+            entries,
+            tmp_path,
+            mappings_path,
+            generate_undo_script=False,
+            assume_yes=True,
+        )
+
+        assert (tmp_path / "a.MOV").is_file()
+        assert (tmp_path / "existing target.MOV").is_file()
+
+
+class TestRunPhase1PreviewHash:
+    """Locks in the invariant review_sync depends on: run_phase1 records
+    preview_jpeg_sha256 as the actual content hash of the preview JPEG it
+    writes to disk."""
+
+    def test_preview_jpeg_sha256_matches_the_written_file(self, tmp_path, monkeypatch):
+        source = touch(tmp_path / "a.MOV")
+        monkeypatch.setattr(
+            cli,
+            "extract_frame",
+            lambda source, output: output.write_bytes(b"fake-frame-bytes"),
+        )
+        monkeypatch.setattr(cli, "generate_caption", lambda *a, **k: "a caption")
+
+        mappings_path = tmp_path / "rename_mappings.json"
+        review_dir = tmp_path / "review"
+
+        _all, new_entries, _skipped = cli.run_phase1(
+            [source],
+            tmp_path,
+            mappings_path,
+            review_dir,
+            model="fake-model",
+            prompt="fake-prompt",
+            prepend=False,
+            prefix="",
+            suffix="",
+            max_file_name_length=255,
+        )
+
+        assert len(new_entries) == 1
+        entry = new_entries[0]
+        assert entry.preview_jpeg_sha256 == hash_file(tmp_path / entry.preview_jpeg)
+
+    def test_same_run_name_collision_does_not_clobber_the_other_preview(
+        self, tmp_path, monkeypatch
+    ):
+        """ "a.MOV" (caption "b c") and "a b.MOV" (caption "c") both assemble
+        to "a b c" -- a real, if narrow, way two clips processed in the same
+        run can coincidentally collide before disambiguate() has a chance to
+        tell them apart. The naive fix (rename straight to <new_stem>.jpg as
+        each entry is processed) lets the second one silently overwrite the
+        first's preview JPEG on disk; each entry's preview_jpeg/
+        preview_jpeg_sha256 must end up pointing at *its own* frame."""
+        a = touch(tmp_path / "a.MOV")
+        a_b = touch(tmp_path / "a b.MOV")
+
+        def fake_extract_frame(source, output):
+            output.write_bytes(f"frame-for-{source.stem}".encode())
+
+        def fake_generate_caption(frame_path, prompt, model):
+            return "c" if frame_path.endswith(".tmp.a b.jpg") else "b c"
+
+        monkeypatch.setattr(cli, "extract_frame", fake_extract_frame)
+        monkeypatch.setattr(cli, "generate_caption", fake_generate_caption)
+
+        mappings_path = tmp_path / "rename_mappings.json"
+        review_dir = tmp_path / "review"
+
+        _all, new_entries, _skipped = cli.run_phase1(
+            [a, a_b],
+            tmp_path,
+            mappings_path,
+            review_dir,
+            model="fake-model",
+            prompt="fake-prompt",
+            prepend=False,
+            prefix="",
+            suffix="",
+            max_file_name_length=255,
+        )
+
+        assert len(new_entries) == 2
+        by_original = {e.original_files[0]: e for e in new_entries}
+        entry_a = by_original["a.MOV"]
+        entry_a_b = by_original["a b.MOV"]
+
+        # Both assembled to "a b c" -- disambiguation must have separated them.
+        assert {entry_a.new_stem, entry_a_b.new_stem} == {"a b c", "a b c_2"}
+        assert entry_a.new_stem != entry_a_b.new_stem
+
+        # Each entry's on-disk preview holds *its own* frame, and its
+        # recorded hash matches that file, not the other entry's.
+        preview_a = tmp_path / entry_a.preview_jpeg
+        preview_a_b = tmp_path / entry_a_b.preview_jpeg
+        assert preview_a.read_bytes() == b"frame-for-a"
+        assert preview_a_b.read_bytes() == b"frame-for-a b"
+        assert entry_a.preview_jpeg_sha256 == hash_file(preview_a)
+        assert entry_a_b.preview_jpeg_sha256 == hash_file(preview_a_b)
