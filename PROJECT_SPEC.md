@@ -971,6 +971,43 @@ These were identified as open questions, not yet decided:
    semantics as Phase 2 — the extra safety comes from showing more, not
    from making it harder to bypass.
 
+## Future Improvements
+
+Not yet built; identified after the phases above were implemented and
+shipping.
+
+1. **Content-hash-based idempotency across separate batches.** Today,
+   idempotent re-running of `--dry-run` (design gap 1, above) only holds
+   *within* a single not-yet-applied `rename_mappings.json`: Phase 2
+   archives that file to `review/applied_renames_<timestamp>.json` on
+   success (`rename.py`'s `write_audit_trail`), and nothing ever reads
+   those archives back. `discover_input_dir` also has no filter for
+   "generic camera name" -- it lists every `.mov`/`.mp4` in the directory
+   by extension alone. So if `--input-dir` is pointed at the same folder
+   across two separate `--dry-run`+`--rename-only` cycles run at different
+   times, and files renamed by the first cycle are still sitting in that
+   directory, slate has no record they were already captioned and will
+   caption and rename them again, stacking a second caption onto the
+   already-renamed name.
+
+   The `preview_jpeg_sha256` hashing that exists today (`review_sync.py`)
+   doesn't help here: it hashes the *extracted preview JPEG*, not the
+   source video file, and is only ever checked against entries from the
+   *current* run's `rename_mappings.json` -- reconciling a human's JPEG
+   rename in `review/` before Phase 2 applies. It's archived away (and
+   never read again) along with the rest of that file's contents once
+   Phase 2 succeeds.
+
+   A real fix would hash the source video files themselves (or a fast
+   proxy -- size + mtime, or a partial hash of the first N bytes, to avoid
+   reading full ProRes RAW files start-to-finish) and check that against a
+   record persisted across runs -- e.g. scanning `review/
+   applied_renames_*.json` archives, or maintaining a running index --
+   before deciding whether to (re)caption a file. Not built; today's
+   workaround is scoping `--input-dir`/`--input-files` to only the new
+   files per run, or moving already-processed footage out of the watched
+   directory between runs.
+
 ## Configuration
 
 **Location:** `~/.config/slate/config.toml`, hardcoded as the default in
