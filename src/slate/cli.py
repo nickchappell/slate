@@ -22,7 +22,6 @@ from slate.mappings import (
     major_version_mismatch,
     read_app_version,
     save_mappings,
-    sort_key,
 )
 from slate.pairing import build_groups, discover_input_dir
 from slate.preflight import run_preflight_checks
@@ -607,9 +606,21 @@ def run_phase2(
                 undo_path = top_level_dir / f"undo_renames_{timestamp}.sh"
                 write_undo_script(log, undo_path)
                 output.info(f"Undo script written: {undo_path.name}")
+                output.console.print(f"  Run with: [cyan]./{undo_path.name}[/cyan]")
+
+
+def _print_rename_preview(plan) -> None:
+    output.console.print("[bold]Rename preview:[/bold]")
+    for op in plan.operations:
+        for old_path, new_path in zip(op.old_paths, op.new_paths, strict=True):
+            output.console.print(
+                f"  [cyan]{old_path.name}[/cyan] --> [green]{new_path.name}[/green]"
+            )
+    output.console.print()
 
 
 def _prompt_phase2(plan) -> bool:
+    _print_rename_preview(plan)
     message = f"{len(plan.operations)} rename operations"
     if plan.problem_count:
         message += f", [yellow]{plan.problem_count} issue(s)[/yellow] reported above"
@@ -633,14 +644,7 @@ def _prompt_phase3(plan, newly_processed_ok: list[MappingEntry]) -> bool:
         f"[cyan]{carried_over_in_plan} carried over[/cyan] from a previous run).\n"
     )
 
-    sample = sorted(newly_processed_ok, key=sort_key)[:3]
-    if sample:
-        output.console.print("[bold]Sample of newly generated captions:[/bold]")
-        for entry in sample:
-            output.console.print(
-                f"  {min(entry.original_files)}  ->  [italic]{entry.new_stem}[/italic]"
-            )
-        output.console.print()
+    _print_rename_preview(plan)
 
     return Confirm.ask(f"Continue with {len(plan.operations)} renames?", default=False)
 
