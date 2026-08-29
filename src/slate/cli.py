@@ -47,7 +47,8 @@ _USAGE_EXAMPLES = [
         "slate --input-dir ~/Movies/Footage --dry-run",
     ),
     (
-        "Phase 2: apply a reviewed (optionally hand-edited) rename_mappings.json",
+        "Phase 2: after reviewing (rename a JPEG in review/ to correct its "
+        "caption, delete one to skip that file), apply the renames",
         "slate --input-dir ~/Movies/Footage --rename-only \\\n"
         "      --rename-mappings=review/rename_mappings.json",
     ),
@@ -685,9 +686,10 @@ def main(argv: list[str] | None = None) -> None:
             )
             output.console.print("\n[bold]Next steps:[/bold]")
             output.console.print(
-                f"  1. Review the captions: rename a JPEG in [cyan]{review_dir}/[/cyan] "
-                "to correct it, or delete one to skip that file. (You can also "
-                f"hand-edit new_stem directly in [cyan]{mappings_path}[/cyan].)"
+                f"  1. Review the captions: rename a JPEG in "
+                f"[cyan]{review_dir}/[/cyan] to correct it, or delete one to skip "
+                f"that file. (You can also hand-edit new_stem directly in "
+                f"[cyan]{mappings_path}[/cyan].)"
             )
             output.console.print(
                 "  2. Apply the renames: "
