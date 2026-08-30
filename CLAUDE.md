@@ -138,3 +138,28 @@ Module layout under `src/slate/`:
 - `PROJECT_SPEC.md` is the source of truth for design rationale; when
   behavior changes, check whether it (and README.md's "Technical Decisions
   and Opinions" section) need updating too.
+
+## Planned Improvements
+
+Ideas not yet implemented. Each should get a full write-up in
+`PROJECT_SPEC.md` (and a mention in README.md's "Technical Decisions and
+Opinions") when it lands.
+
+- **Multi-frame input for VLM inference.** Today `extraction.py` extracts a
+  single frame and `inference.py` captions it with `num_images=1`, so the
+  caption is only as good as that one grab (motion blur, a frame on a cut,
+  a subject facing away all poison it). Sample several frames spread across
+  the clip instead. Two ways to feed them:
+  - **Grid/montage** — tile the frames into one image. Robust (works with
+    any single-image model) and fixed at one image's worth of tokens, but
+    downsamples every frame (a 3x3 grid ~= 1/3 linear resolution per cell,
+    which hurts for reading slate markings / signage) and needs a prompt
+    that says "these are frames from one clip, describe the scene, not the
+    layout."
+  - **Native multi-image** — `apply_chat_template(..., num_images=n)` +
+    `image=[...]`. Keeps every frame full-resolution; higher quality when
+    the installed `mlx-vlm` + model support it reliably. Qwen2-VL also has
+    real video-input support worth evaluating here.
+
+  Prototype both and compare caption quality on real footage in
+  `tests/fixtures/footage/` before committing to one.
