@@ -1,6 +1,7 @@
 .PHONY: help install sync lint lint-fix format format-check fix test test-unit test-integration \
-	coverage coverage-report check run model-update-check build install-tool reinstall-tool uninstall-tool \
-	update outdated lock lock-check bump-version github-release create-release clean
+	test-all coverage coverage-report check audit run model-update-check build install-tool \
+	reinstall-tool uninstall-tool update outdated lock lock-check bump-version github-release \
+	create-release clean
 
 # Used by bump-version; override with e.g. `make bump-version PART=minor`.
 PART ?= patch
@@ -33,12 +34,16 @@ help:
 	@printf "                   $(GREEN)e.g. make test$(RESET)\n"
 	@printf "  $(CYAN)test-integration$(RESET) Run integration tests only\n"
 	@printf "                   $(GREEN)e.g. make test-integration$(RESET)\n"
+	@printf "  $(CYAN)test-all$(RESET)         Run unit + integration tests together\n"
+	@printf "                   $(GREEN)e.g. make test-all$(RESET)\n"
 	@printf "  $(CYAN)coverage$(RESET)         Run unit tests with coverage (term + htmlcov/ + coverage.xml)\n"
 	@printf "                   $(GREEN)e.g. make coverage$(RESET)\n"
 	@printf "  $(CYAN)coverage-report$(RESET)  Regenerate term/HTML/XML reports from the last coverage run\n"
 	@printf "                   $(GREEN)e.g. make coverage-report$(RESET)\n"
 	@printf "  $(CYAN)check$(RESET)            lint + format-check + lock-check + test (pre-commit sanity)\n"
 	@printf "                   $(GREEN)e.g. make check$(RESET)\n"
+	@printf "  $(CYAN)audit$(RESET)            Scan dependencies for known vulnerabilities (pip-audit)\n"
+	@printf "                   $(GREEN)e.g. make audit$(RESET)\n"
 	@printf "  $(CYAN)run$(RESET) ARGS=...     Run the CLI\n"
 	@printf "                   $(GREEN)e.g. make run ARGS='--dry-run --input-dir footage'$(RESET)\n"
 	@printf "  $(CYAN)model-update-check$(RESET) Check the Hub for a newer model revision\n"
@@ -94,6 +99,9 @@ test test-unit:
 test-integration:
 	uv run pytest tests/integration -m integration
 
+test-all:
+	uv run pytest tests/
+
 coverage:
 	uv run pytest tests/ --ignore=tests/integration \
 		--cov=slate --cov-report=term-missing --cov-report=html --cov-report=xml
@@ -104,6 +112,9 @@ coverage-report:
 	uv run coverage xml
 
 check: lint format-check lock-check test
+
+audit:
+	uv run --with pip-audit pip-audit
 
 run:
 	uv run slate $(ARGS)
@@ -169,5 +180,5 @@ create-release: bump-version
 	$(MAKE) github-release
 
 clean:
-	rm -rf .pytest_cache .ruff_cache build dist *.egg-info
+	rm -rf .pytest_cache .ruff_cache build dist *.egg-info htmlcov coverage.xml .coverage .coverage.*
 	find . -type d -name '__pycache__' -exec rm -rf {} +
