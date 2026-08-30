@@ -7,8 +7,13 @@ from slate.pairing import (
     build_groups,
     discover_input_dir,
     group_by_stem,
+    validate_media_files,
     verify_pair,
 )
+
+
+def _video_info(p):
+    return {"format": {"duration": "2.0"}, "streams": [{"codec_type": "video"}]}
 
 
 def touch(path: Path, size: int = 0) -> Path:
@@ -37,6 +42,44 @@ class TestDiscoverInputDir:
         touch(tmp_path / "a.MOV")
         found = discover_input_dir(tmp_path)
         assert [p.name for p in found] == ["a.MOV", "b.MOV"]
+
+    def test_skips_appledouble_sidecars(self, tmp_path):
+        touch(tmp_path / "A017_C015.MOV")
+        touch(tmp_path / "._A017_C015.MOV", size=4096)
+        touch(tmp_path / "._A017_C015.MP4", size=4096)
+        found = discover_input_dir(tmp_path)
+        assert [p.name for p in found] == ["A017_C015.MOV"]
+
+
+class TestValidateMediaFiles:
+    def test_empty_input(self):
+        assert validate_media_files([]) == ([], [])
+
+    def test_all_valid_pass_through_in_order(self, monkeypatch):
+        monkeypatch.setattr("slate.pairing._ffprobe_stream_info", _video_info)
+        files = [Path("b.MOV"), Path("a.MP4")]
+        usable, rejected = validate_media_files(files)
+        assert usable == files
+        assert rejected == []
+
+    def test_unreadable_file_is_rejected(self, monkeypatch):
+        monkeypatch.setattr(
+            "slate.pairing._ffprobe_stream_info",
+            lambda p: None if p.name.startswith("._") else _video_info(p),
+        )
+        usable, rejected = validate_media_files([Path("a.MOV"), Path("._a.MOV")])
+        assert usable == [Path("a.MOV")]
+        assert [p.name for p, _ in rejected] == ["._a.MOV"]
+        assert "ffprobe could not read it" in rejected[0][1]
+
+    def test_file_without_video_stream_is_rejected(self, monkeypatch):
+        monkeypatch.setattr(
+            "slate.pairing._ffprobe_stream_info",
+            lambda p: {"format": {}, "streams": [{"codec_type": "audio"}]},
+        )
+        usable, rejected = validate_media_files([Path("sound.MP4")])
+        assert usable == []
+        assert rejected == [(Path("sound.MP4"), "no video stream")]
 
 
 class TestGroupByStem:

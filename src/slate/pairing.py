@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -10,6 +11,7 @@ from pathlib import Path
 VIDEO_EXTENSIONS = {".mov", ".mp4"}
 DURATION_TOLERANCE_SECONDS = 0.1
 FRAME_COUNT_TOLERANCE = 1
+MEDIA_VALIDATION_WORKERS = 8
 
 
 @dataclass
@@ -31,10 +33,19 @@ def discover_input_dir(input_dir: Path) -> list[Path]:
     # Flat listing, not recursive -- matches rename_mappings.json's
     # bare-filename schema, which assumes one flat directory per camera
     # dump/import.
+    #
+    # Skip AppleDouble sidecars (``._<name>``): macOS writes one next to
+    # every real file when resource forks / xattrs can't live in the
+    # filesystem natively (exFAT, FAT, SMB) -- e.g. after a QuickLook
+    # rotate on an exFAT card. They carry the video extension but are a
+    # few KB of metadata, never footage. validate_media_files() is the
+    # backstop for any that arrive via --input-files.
     return sorted(
         p
         for p in input_dir.iterdir()
-        if p.is_file() and p.suffix.lower() in VIDEO_EXTENSIONS
+        if p.is_file()
+        and not p.name.startswith("._")
+        and p.suffix.lower() in VIDEO_EXTENSIONS
     )
 
 
@@ -99,6 +110,45 @@ def _extract_duration_and_frames(info: dict) -> tuple[float | None, int | None]:
         break
 
     return duration, frames
+
+
+def _has_video_stream(info: dict) -> bool:
+    return any(s.get("codec_type") == "video" for s in info.get("streams", []))
+
+
+def validate_media_files(
+    files: list[Path],
+) -> tuple[list[Path], list[tuple[Path, str]]]:
+    """Probe each candidate with ffprobe before the expensive decode +
+    caption steps run. Returns ``(usable, rejected)``; every rejected entry
+    carries a short reason for the skip notice. Input order is preserved in
+    both lists.
+
+    A single ffprobe container read (no frame decode) is milliseconds
+    against seconds per clip for extraction + VLM inference, so this is
+    cheap insurance against feeding junk downstream: AppleDouble sidecars
+    (``._foo.mov``) passed explicitly via --input-files, zero-byte or
+    truncated copies, and files whose extension lies about their contents.
+    See "Input Validation" in PROJECT_SPEC.md.
+    """
+    if not files:
+        return [], []
+
+    def check(path: Path) -> tuple[Path, str | None]:
+        info = _ffprobe_stream_info(path)
+        if info is None:
+            return path, "ffprobe could not read it (not a valid media file?)"
+        if not _has_video_stream(info):
+            return path, "no video stream"
+        return path, None
+
+    workers = min(MEDIA_VALIDATION_WORKERS, len(files))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        results = list(pool.map(check, files))
+
+    usable = [p for p, reason in results if reason is None]
+    rejected = [(p, reason) for p, reason in results if reason is not None]
+    return usable, rejected
 
 
 def verify_pair(file_a: Path, file_b: Path) -> tuple[bool, str | None]:
