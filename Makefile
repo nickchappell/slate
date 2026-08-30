@@ -1,5 +1,6 @@
-.PHONY: help install sync lint lint-fix format format-check test test-unit test-integration \
-	check run update outdated lock bump-version github-release create-release clean
+.PHONY: help install sync lint lint-fix format format-check fix test test-unit test-integration \
+	coverage coverage-report check run model-update-check build install-tool reinstall-tool uninstall-tool \
+	update outdated lock lock-check bump-version github-release create-release clean
 
 # Used by bump-version; override with e.g. `make bump-version PART=minor`.
 PART ?= patch
@@ -26,20 +27,38 @@ help:
 	@printf "                   $(GREEN)e.g. make format$(RESET)\n"
 	@printf "  $(CYAN)format-check$(RESET)     Run ruff format --check\n"
 	@printf "                   $(GREEN)e.g. make format-check$(RESET)\n"
+	@printf "  $(CYAN)fix$(RESET)              Auto-fix everything: ruff check --fix + ruff format\n"
+	@printf "                   $(GREEN)e.g. make fix$(RESET)\n"
 	@printf "  $(CYAN)test$(RESET)             Run unit tests (excludes tests/integration)\n"
 	@printf "                   $(GREEN)e.g. make test$(RESET)\n"
 	@printf "  $(CYAN)test-integration$(RESET) Run integration tests only\n"
 	@printf "                   $(GREEN)e.g. make test-integration$(RESET)\n"
-	@printf "  $(CYAN)check$(RESET)            lint + format-check + test (pre-commit sanity)\n"
+	@printf "  $(CYAN)coverage$(RESET)         Run unit tests with coverage (term + htmlcov/ + coverage.xml)\n"
+	@printf "                   $(GREEN)e.g. make coverage$(RESET)\n"
+	@printf "  $(CYAN)coverage-report$(RESET)  Regenerate term/HTML/XML reports from the last coverage run\n"
+	@printf "                   $(GREEN)e.g. make coverage-report$(RESET)\n"
+	@printf "  $(CYAN)check$(RESET)            lint + format-check + lock-check + test (pre-commit sanity)\n"
 	@printf "                   $(GREEN)e.g. make check$(RESET)\n"
 	@printf "  $(CYAN)run$(RESET) ARGS=...     Run the CLI\n"
 	@printf "                   $(GREEN)e.g. make run ARGS='--dry-run --input-dir footage'$(RESET)\n"
+	@printf "  $(CYAN)model-update-check$(RESET) Check the Hub for a newer model revision\n"
+	@printf "                   $(GREEN)e.g. make model-update-check$(RESET)\n"
+	@printf "  $(CYAN)build$(RESET)            Build the wheel + sdist into dist/ (uv build)\n"
+	@printf "                   $(GREEN)e.g. make build$(RESET)\n"
+	@printf "  $(CYAN)install-tool$(RESET)     Install slate on PATH as a uv tool\n"
+	@printf "                   $(GREEN)e.g. make install-tool$(RESET)\n"
+	@printf "  $(CYAN)reinstall-tool$(RESET)   Reinstall the slate uv tool from the current source\n"
+	@printf "                   $(GREEN)e.g. make reinstall-tool$(RESET)\n"
+	@printf "  $(CYAN)uninstall-tool$(RESET)   Remove the slate uv tool from PATH\n"
+	@printf "                   $(GREEN)e.g. make uninstall-tool$(RESET)\n"
 	@printf "  $(CYAN)update$(RESET)           Upgrade all dependencies and refresh uv.lock\n"
 	@printf "                   $(GREEN)e.g. make update$(RESET)\n"
 	@printf "  $(CYAN)outdated$(RESET)         Show dependencies with newer versions available\n"
 	@printf "                   $(GREEN)e.g. make outdated$(RESET)\n"
 	@printf "  $(CYAN)lock$(RESET)             Regenerate uv.lock without upgrading anything\n"
 	@printf "                   $(GREEN)e.g. make lock$(RESET)\n"
+	@printf "  $(CYAN)lock-check$(RESET)       Verify uv.lock is up to date with pyproject.toml\n"
+	@printf "                   $(GREEN)e.g. make lock-check$(RESET)\n"
 	@printf "  $(CYAN)bump-version$(RESET)     Bump pyproject.toml version, commit, and tag it\n"
 	@printf "                   $(YELLOW)(PART=patch|minor|major, default patch)$(RESET)\n"
 	@printf "                   $(GREEN)e.g. make bump-version PART=minor$(RESET)\n"
@@ -67,16 +86,42 @@ format:
 format-check:
 	uv run ruff format --check .
 
+fix: lint-fix format
+
 test test-unit:
 	uv run pytest tests/ --ignore=tests/integration
 
 test-integration:
 	uv run pytest tests/integration -m integration
 
-check: lint format-check test
+coverage:
+	uv run pytest tests/ --ignore=tests/integration \
+		--cov=slate --cov-report=term-missing --cov-report=html --cov-report=xml
+
+coverage-report:
+	uv run coverage report --show-missing
+	uv run coverage html
+	uv run coverage xml
+
+check: lint format-check lock-check test
 
 run:
 	uv run slate $(ARGS)
+
+model-update-check:
+	uv run slate --model-update-check
+
+build:
+	uv build
+
+install-tool:
+	uv tool install .
+
+reinstall-tool:
+	uv tool install --reinstall .
+
+uninstall-tool:
+	uv tool uninstall slate
 
 update:
 	uv lock --upgrade
@@ -87,6 +132,9 @@ outdated:
 
 lock:
 	uv lock
+
+lock-check:
+	uv lock --check
 
 bump-version:
 	@if [ -n "$$(git status --porcelain)" ]; then \
