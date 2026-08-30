@@ -23,7 +23,7 @@ from slate.mappings import (
     read_app_version,
     save_mappings,
 )
-from slate.pairing import build_groups, discover_input_dir
+from slate.pairing import build_groups, discover_input_dir, validate_media_files
 from slate.preflight import run_preflight_checks
 from slate.rename import (
     RenameLogEntry,
@@ -370,6 +370,9 @@ def run_phase1(
     max_file_name_length: int,
 ) -> tuple[list[MappingEntry], list[MappingEntry], list[MappingEntry]]:
     """Returns (all_entries, new_entries, skipped_entries)."""
+    files, rejected = validate_media_files(files)
+    for path, reason in rejected:
+        output.warn(f"skipping {path.name}: {reason}")
     groups = build_groups(files)
     _check_mapping_version_or_exit(mappings_path)
     existing = load_mappings(mappings_path)

@@ -371,6 +371,42 @@ excluding one file from a batch without having to move it elsewhere first.
 - Paths may be relative or absolute, resolved the same as any other
   CLI-supplied path.
 
+## Input Validation
+
+Runs on the resolved input set (from `--input-dir` or `--input-files`) at
+the very start of Phase 1, before pairing, frame extraction, or inference —
+so junk never reaches the slow/expensive steps.
+
+Two layers:
+
+1. **Name filter (directory scans only).** `discover_input_dir` skips any
+   entry whose name starts with `._`. Those are **AppleDouble sidecars**:
+   macOS writes one next to every real file when a filesystem can't hold
+   resource forks / extended attributes natively (exFAT, FAT, SMB) — e.g.
+   after a QuickLook rotate on an exFAT camera card. They carry the video
+   extension (`._A017_C015.MOV`) but are a few KB of metadata, and their
+   stem (`._A017_C015`) doesn't match the real file's, so without this
+   filter they sail through as lone single-file groups. `._` has exactly
+   one meaning, so this one case is filtered by name rather than probed.
+
+2. **`ffprobe` gate (both input modes).** `validate_media_files` runs one
+   `ffprobe -show_format -show_streams` per file — a container header read,
+   no frame decode, low-single-digit milliseconds against seconds per clip
+   for extraction + VLM — in a small thread pool. A file is kept only if
+   `ffprobe` can read it *and* it reports at least one `codec_type ==
+   "video"` stream. Anything else is dropped with a per-file
+   `output.warn` ("ffprobe could not read it" / "no video stream") and the
+   run continues on what's left. This is the general net: AppleDouble
+   files passed explicitly via `--input-files` (which bypass layer 1),
+   zero-byte or truncated copies, and files whose extension lies about
+   their contents.
+
+Same spirit as Frame Extraction Strategy below — *attempt, not predict*:
+run the real tool and check the result rather than maintaining a codec
+allowlist. Known minor redundancy: a verified 2-file pair gets re-probed
+in `verify_pair`; not worth threading the first probe's result through for
+a personal-scale tool.
+
 ## MOV/MP4 Pairing Logic (File Pairing & Source Selection)
 
 Decides, for each clip, which **one** file gets handed to the Frame
@@ -539,7 +575,10 @@ that skips the review checkpoint — see Phase 3 below.
 
 ### Phase 1: `--dry-run`
 
-1. Determine file groups (Input Selection + MOV/MP4 Pairing Logic, above).
+1. Determine file groups (Input Selection + Input Validation + MOV/MP4
+   Pairing Logic, above). Input Validation runs first: drop `._` AppleDouble
+   sidecars and anything `ffprobe` can't read as video, with a warning per
+   dropped file, before pairing.
 2. **Re-run behavior — skip groups already present in an existing
    `rename_mappings.json`.** If a `rename_mappings.json` already exists at the output
    location from an earlier `--dry-run`, load it *before* doing any

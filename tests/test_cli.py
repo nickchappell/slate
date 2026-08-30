@@ -458,6 +458,7 @@ class TestRunPhase1PreviewHash:
 
     def test_preview_jpeg_sha256_matches_the_written_file(self, tmp_path, monkeypatch):
         source = touch(tmp_path / "a.MOV")
+        monkeypatch.setattr(cli, "validate_media_files", lambda files: (files, []))
         monkeypatch.setattr(
             cli,
             "extract_frame",
@@ -504,6 +505,7 @@ class TestRunPhase1PreviewHash:
         def fake_generate_caption(frame_path, prompt, model):
             return "c" if frame_path.endswith(".tmp.a b.jpg") else "b c"
 
+        monkeypatch.setattr(cli, "validate_media_files", lambda files: (files, []))
         monkeypatch.setattr(cli, "extract_frame", fake_extract_frame)
         monkeypatch.setattr(cli, "generate_caption", fake_generate_caption)
 

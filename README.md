@@ -252,7 +252,16 @@ win over the config file**, which always wins over built-in defaults.
 `slate` is orchestration around a handful of external tools -- it doesn't
 implement video decoding, image processing, or caption generation itself:
 
-1. **Pairing (`ffprobe`).** Files sharing a stem (e.g. `A017_C010.MOV` /
+1. **Input validation (`ffprobe`).** Before any expensive work, every file
+   in the resolved input set is probed once with `ffprobe` (a container
+   read, no frame decode -- milliseconds per file) and dropped with a
+   warning if it can't be read or reports no video stream. This is the
+   backstop for AppleDouble sidecars (`._A017_C010.MOV` -- a few KB of
+   metadata macOS writes next to real files on exFAT/FAT/SMB, e.g. after a
+   QuickLook rotate on a camera card), zero-byte or truncated copies, and
+   files whose extension lies about their contents. Directory scans also
+   skip `._`-prefixed names outright, without probing.
+2. **Pairing (`ffprobe`).** Files sharing a stem (e.g. `A017_C010.MOV` /
    `A017_C010.MP4`) are verified as the same recording by comparing
    container-reported duration (falling back to frame count) via `ffprobe`,
    before either file is trusted as a stand-in for the other. The smaller
@@ -260,7 +269,7 @@ implement video decoding, image processing, or caption generation itself:
    source, since 6K ProRes RAW buys no captioning-accuracy benefit -- the VLM
    resizes internally regardless of source resolution -- and only slows down
    frame extraction.
-2. **Frame extraction, with a fallback ladder.** A single frame is pulled
+3. **Frame extraction, with a fallback ladder.** A single frame is pulled
    from a fixed timestamp per clip:
    - **First**, plain `ffmpeg` -- works for H.264/H.265 and regular ProRes
      (via VideoToolbox), but **cannot decode ProRes RAW** (no decoder exists
@@ -273,14 +282,14 @@ implement video decoding, image processing, or caption generation itself:
    - **If both fail**, the clip is marked as an `"error"` group in
      `rename_mappings.json` and the rest of the batch continues -- one undecodable
      clip never halts a run.
-3. **Captioning (`mlx-vlm` + Qwen2-VL-2B).** The extracted frame is sent to a
+4. **Captioning (`mlx-vlm` + Qwen2-VL-2B).** The extracted frame is sent to a
    local vision-language model with a prompt engineered to produce a short,
    lowercase phrase rather than a full descriptive sentence (instruction-
    tuned VLMs default to verbose, scene-setting output unless explicitly
    steered away from it). A fixed generation-time token cap backstops the
    prompt's word-count request, since no prompt wording reliably bounds
    output length on its own.
-4. **Normalization and assembly.** Raw model output is defensively cleaned up
+5. **Normalization and assembly.** Raw model output is defensively cleaned up
    (filesystem-unsafe characters stripped, whitespace collapsed, surrounding
    quotes/punctuation trimmed, lowercased, truncated to 70 characters at a
    word boundary) and then assembled into the final filename alongside the
@@ -433,6 +442,19 @@ with one specific message per problem (wrong OS, wrong CPU, missing
 `ffmpeg`/`ffprobe`/`qlmanage`/`sips`), all reported together in one pass,
 rather than surfacing a cryptic import error or a `subprocess` failure
 halfway through a batch.
+
+**Input validation runs before pairing.** The resolved input set is probed
+once per file with `ffprobe` (container read only, no decode) and anything
+unreadable or without a video stream is dropped with a warning, before the
+decode/caption pipeline touches it. This is deliberately attempt-not-predict
+like frame extraction below -- the trigger case was AppleDouble sidecars
+(`._A017_C015.MOV`, a few KB of resource-fork metadata macOS drops next to
+real files on exFAT/FAT/SMB, e.g. after a QuickLook rotate on a camera card)
+carrying a `.mov`/`.mp4` extension and a distinct stem, so they sailed
+through discovery as lone single-file groups and stalled on `qlmanage`
+during extraction. Directory scans skip `._`-prefixed names outright (an
+AppleDouble file is unambiguous from its name); the `ffprobe` gate is the
+general net that also covers `--input-files` and zero-byte/truncated copies.
 
 **MOV/MP4 pairing.** A same-stem pair is verified as the same recording via
 `ffprobe` duration (falling back to frame count) before either file is
