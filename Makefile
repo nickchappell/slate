@@ -50,9 +50,9 @@ help:
 	@printf "                   $(GREEN)e.g. make model-update-check$(RESET)\n"
 	@printf "  $(CYAN)build$(RESET)            Build the wheel + sdist into dist/ (uv build)\n"
 	@printf "                   $(GREEN)e.g. make build$(RESET)\n"
-	@printf "  $(CYAN)install-tool$(RESET)     Install slate on PATH as a uv tool\n"
+	@printf "  $(CYAN)install-tool$(RESET)     Install slate on PATH as a uv tool (bytecode precompiled)\n"
 	@printf "                   $(GREEN)e.g. make install-tool$(RESET)\n"
-	@printf "  $(CYAN)reinstall-tool$(RESET)   Reinstall the slate uv tool from the current source\n"
+	@printf "  $(CYAN)reinstall-tool$(RESET)   Reinstall the slate uv tool from the current source (bytecode precompiled)\n"
 	@printf "                   $(GREEN)e.g. make reinstall-tool$(RESET)\n"
 	@printf "  $(CYAN)uninstall-tool$(RESET)   Remove the slate uv tool from PATH\n"
 	@printf "                   $(GREEN)e.g. make uninstall-tool$(RESET)\n"
@@ -126,10 +126,10 @@ build:
 	uv build
 
 install-tool:
-	uv tool install .
+	uv tool install --compile-bytecode .
 
 reinstall-tool:
-	uv tool install --reinstall .
+	uv tool install --reinstall --compile-bytecode .
 
 uninstall-tool:
 	uv tool uninstall slate

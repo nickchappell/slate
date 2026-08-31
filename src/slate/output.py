@@ -37,3 +37,7 @@ def info(message: str) -> None:
 
 def renamed(message: str) -> None:
     console.print(f"[green]🔄 {message}[/green]")
+
+
+def processing(message: str) -> None:
+    console.print(f"[cyan]🔍 {message}[/cyan]")

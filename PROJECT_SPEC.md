@@ -231,6 +231,36 @@ so it isn't a surprise at first run.
   management tools already cover this), just worth knowing about if
   experimenting with multiple models during development.
 
+## Startup Time
+
+Importing `mlx_vlm` pulls in `transformers`, `mlx.core`, `httpx`, and the
+rest of that dependency tree — about **0.9 s** of pure import cost on an
+M-series machine, before a single frame is decoded. `slate`'s own modules
+account for a few milliseconds combined, so compiling them (Cython, mypyc,
+Nuitka) buys nothing; the heavyweight packages are already compiled C
+extensions with nothing left to squeeze.
+
+The fix is to **not import what a given run won't use**. `inference.py`
+keeps the heavy names (`mlx_vlm.load` / `.generate` /
+`prompt_utils.apply_chat_template` / `utils.load_config`, plus
+`huggingface_hub.snapshot_download`) as module-level `None` placeholders and
+populates them on first use via `_ensure_mlx_deps()` / `_ensure_hub_deps()`.
+`cli.py` imports `inference` for its function names only — resolving those
+names is cheap until something actually calls one. Result:
+
+- `--version`, `--help`, a failed preflight, a usage error — no heavy
+  import at all (~0.1 s end to end instead of ~1 s).
+- `--rename-only` (Phase 2) never captions, so it never touches `mlx_vlm`
+  or `huggingface_hub`.
+- `--dry-run` / `--process-and-rename` still pay the cost, but only at the
+  first caption — after preflight, config resolution, discovery, pairing,
+  and the `slate … started` / file-list output have already printed, so
+  the run *looks* responsive instead of stalling silently on launch.
+
+Placeholders are declared at module scope (rather than imported inside each
+function) specifically so tests can monkeypatch them without importing the
+real packages — the unit suite runs without `mlx_vlm` loaded.
+
 ## Frame Extraction Strategy
 
 Operates on a single **selected source file** — whichever file the File

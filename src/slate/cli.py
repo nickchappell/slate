@@ -370,6 +370,13 @@ def run_phase1(
     max_file_name_length: int,
 ) -> tuple[list[MappingEntry], list[MappingEntry], list[MappingEntry]]:
     """Returns (all_entries, new_entries, skipped_entries)."""
+    if files:
+        output.console.print(
+            f"\n[bold]Starting processing of {len(files)} file(s):[/bold]"
+        )
+        for path in files:
+            output.console.print(f"  [cyan]{path}[/cyan]")
+
     files, rejected = validate_media_files(files)
     for path, reason in rejected:
         output.warn(f"skipping {path.name}: {reason}")
@@ -419,6 +426,14 @@ def run_phase1(
             all_entries.append(entry)
             output.error(f"{' / '.join(original_files)}: {e}")
             continue
+
+        if len(original_files) > 1:
+            output.processing(
+                f"Running image recognition on {' / '.join(original_files)} "
+                f"(frame from {group.source_file.name})..."
+            )
+        else:
+            output.processing(f"Running image recognition on {original_files[0]}...")
 
         raw_caption = generate_caption(str(tmp_frame_path), prompt, model)
         caption = truncate_caption(normalize_caption(raw_caption))
@@ -655,9 +670,26 @@ def _prompt_phase3(plan, newly_processed_ok: list[MappingEntry]) -> bool:
 # --- Entry point -----------------------------------------------------------
 
 
+def _mode_label(args: argparse.Namespace) -> str:
+    if args.dry_run:
+        return "dry run -- caption clips and write review/rename_mappings.json"
+    if args.rename_only:
+        return "rename -- apply a reviewed rename_mappings.json to disk"
+    if args.process_and_rename:
+        return "process and rename -- caption then rename in one pass"
+    if args.model_update_check:
+        return "model update check"
+    return ""
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = build_parser()
     args = parser.parse_args(argv)
+
+    output.console.print(f"[bold]slate {APP_VERSION}[/bold] started")
+    label = _mode_label(args)
+    if label:
+        output.console.print(f"[dim]{label}[/dim]")
 
     try:
         if args.dry_run or args.process_and_rename:

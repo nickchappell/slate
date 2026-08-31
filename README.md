@@ -500,6 +500,16 @@ is the one explicit, opt-in way to check the Hub for a newer revision. This
 keeps "no cloud dependency after first run" true without a freshness check
 silently running (and silently adding network latency) on every invocation.
 
+**Heavy imports are deferred.** Pulling in `mlx_vlm` (and its
+`transformers`/`mlx.core` tree) costs ~0.9 s before any work happens.
+`inference.py` loads those packages -- and `huggingface_hub` -- only when a
+run actually needs to caption, so `--version`, `--help`, a failed
+preflight, and the entire `--rename-only` phase start in ~0.1 s instead of
+~1 s. `--dry-run`/`--process-and-rename` still pay the cost, but not until
+the first caption, after the startup banner and file list have printed.
+Compiling `slate`'s own modules would save nothing -- they're a few
+milliseconds combined, and the heavy packages are already C extensions.
+
 **Filename assembly truncates the caption, never the original stem or
 `--prefix`/`--suffix`** -- those are the parts a truncation rule must never
 touch, since the whole point of prepend/append/prefix/suffix is that the
