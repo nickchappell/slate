@@ -8,6 +8,10 @@ authors = [
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
+# Personal-use tool, never published -- see "Deliberate Non-Goals" in
+# CLAUDE.md. This classifier makes PyPI (and twine/uv publish) hard-refuse
+# an upload, so an accidental `uv publish` can't leak it.
+classifiers = ["Private :: Do Not Upload"]
 requires-python = ">=3.14"
 # Lower bounds only -- uv.lock pins exact versions for `uv sync`, but
 # `uv tool install .` resolves from here, not the lock, so without floors a
@@ -39,8 +43,20 @@ dev = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = ["--strict-markers", "--strict-config"]
 markers = [
     "integration: exercises real ffmpeg/qlmanage/mlx-vlm against footage in tests/fixtures/footage/ (auto-skipped when empty)",
+]
+
+[tool.coverage.run]
+source = ["slate"]
+branch = true
+
+[tool.coverage.report]
+exclude_also = [
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
 ]
 
 [tool.ruff]

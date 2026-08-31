@@ -317,11 +317,11 @@ make lint              # uv run ruff check .
 make format            # uv run ruff format .
 make test              # unit tests only (see "Tests," below)
 make test-integration  # integration tests only (see "Tests," below)
-make check             # lint + format-check + test, in one shot
+make check             # lint + format-check + lock-check + test, in one shot
 ```
 
 `make check` is the pre-commit sanity check -- run it before considering a
-change done, same bar as CI would apply.
+change done. There is no CI (see below on why); this is the whole gate.
 
 ### Cutting a release
 
@@ -368,7 +368,8 @@ uv run pytest tests/ --ignore=tests/integration
 Fully mocked -- no `ffmpeg`, no real video files, no model download, and no
 network access. Every subprocess call (`ffmpeg`/`ffprobe`/`qlmanage`/`sips`)
 and every `mlx-vlm` call is monkeypatched. Runs in well under a second and is
-safe to run anywhere, including CI. This is also what a plain `uv run pytest`
+safe to run on any machine (no Apple Silicon needed for the unit suite).
+This is also what a plain `uv run pytest`
 effectively reduces to as long as `tests/fixtures/footage/` is empty, since
 the integration tests auto-skip in that case -- but the command above is the
 explicit, unambiguous way to ask for unit tests specifically.
@@ -425,7 +426,7 @@ uv run ruff check --fix .
 # reformat the codebase
 uv run ruff format .
 
-# check formatting without changing anything (what CI would run)
+# check formatting without changing anything (what `make check` runs)
 uv run ruff format --check .
 ```
 
@@ -561,3 +562,15 @@ option, which `click` (and by extension `typer`) doesn't support for
 options -- only for positional arguments. `argparse` handles it natively,
 at the cost of writing `--help` formatting (including the colorized usage
 examples block) by hand instead of getting it for free.
+
+**No CI, and it's a cost decision.** The `mlx-vlm` dependency ships
+macOS-arm64-only wheels, so `uv sync` -- and any test job -- can't run on
+the cheap Linux runners; it would have to be GitHub's macOS runners, which
+bill at 10x. For a personal-use tool that isn't worth it, so `make check`
+run locally is the entire gate. For the same "personal-use, never
+published" reason the package is marked `Private :: Do Not Upload` and
+carries no PyPI discovery metadata (`classifiers`/`keywords`/`urls`); it's
+installed with `uv tool install .` from a checkout. Runtime dependencies
+are pinned with lower bounds only -- `uv.lock` is the reproducibility
+mechanism, and the floors exist because `uv tool install .` resolves from
+`pyproject.toml` rather than the lock.

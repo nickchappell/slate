@@ -137,6 +137,12 @@ Module layout under `src/slate/`:
   that style rather than the space-separated form.
 - All CLI status output goes through `output.console.print` (rich markup),
   not bare `print()`.
+- pytest runs with `--strict-markers` / `--strict-config` (see
+  `[tool.pytest.ini_options]`): a `@pytest.mark.<x>` that isn't registered
+  in the `markers` list is an error, not a silent skip. Register new
+  markers there. Coverage config (`source`, `branch`, `exclude_also`) also
+  lives in `pyproject.toml` under `[tool.coverage.*]`, so `make coverage`
+  and a bare `coverage report` agree.
 
 ## Notes
 
