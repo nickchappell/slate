@@ -670,26 +670,50 @@ def _prompt_phase3(plan, newly_processed_ok: list[MappingEntry]) -> bool:
 # --- Entry point -----------------------------------------------------------
 
 
-def _mode_label(args: argparse.Namespace) -> str:
+def _mode_description(args: argparse.Namespace) -> tuple[str, str]:
+    """Returns (short mode name, a sentence or two describing what it does)."""
     if args.dry_run:
-        return "dry run -- caption clips and write review/rename_mappings.json"
+        return (
+            "Dry-run mode",
+            "Captions are generated for each clip and written, alongside "
+            "preview JPEGs, to the review/ folder. Nothing is renamed -- "
+            "review the captions there, then apply them with --rename-only.",
+        )
     if args.rename_only:
-        return "rename -- apply a reviewed rename_mappings.json to disk"
+        return (
+            "Rename mode",
+            "A previously reviewed rename_mappings.json is applied to disk: "
+            "files are re-checked, renamed, and an audit trail plus an undo "
+            "script are written. No captioning happens in this phase.",
+        )
     if args.process_and_rename:
-        return "process and rename -- caption then rename in one pass"
+        return (
+            "Process-and-rename mode",
+            "Captioning and renaming run back-to-back in one pass, with no "
+            "review checkpoint -- the confirmation prompt shows a sample of "
+            "the generated captions before anything is renamed.",
+        )
     if args.model_update_check:
-        return "model update check"
-    return ""
+        return (
+            "Model-update-check mode",
+            "The Hugging Face Hub is checked for a newer revision of the "
+            "configured model, which is downloaded if found. No footage is "
+            "processed.",
+        )
+    return "", ""
 
 
 def main(argv: list[str] | None = None) -> None:
     parser = build_parser()
     args = parser.parse_args(argv)
 
-    output.console.print(f"[bold]slate {APP_VERSION}[/bold] started")
-    label = _mode_label(args)
-    if label:
-        output.console.print(f"[dim]{label}[/dim]")
+    name, description = _mode_description(args)
+    if name:
+        output.console.print(f"[bold]slate[/bold] started in {name}...")
+        output.console.print()
+        output.console.print(f"[bold]{name}:[/bold] [dim]{description}[/dim]")
+    else:
+        output.console.print("[bold]slate[/bold] started")
 
     try:
         if args.dry_run or args.process_and_rename:
