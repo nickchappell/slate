@@ -151,6 +151,37 @@ Module layout under `src/slate/`:
   behavior changes, check whether it (and README.md's "Technical Decisions
   and Opinions" section) need updating too.
 
+## Deliberate Non-Goals
+
+Decisions made and settled — don't re-propose these without the owner
+raising it first.
+
+- **No CI / no GitHub Actions.** The reason is cost, and it is decisive:
+  this project can only be tested on GitHub's macOS runners (the `mlx-vlm`
+  hard dep ships macOS-arm64-only wheels, so `uv sync` — and therefore any
+  test job — fails outright on the cheap/free Linux runners), and macOS
+  runner minutes bill at **10x** the Linux rate. The owner is not willing
+  to take on that GHA billing exposure for a personal-use tool. This is
+  not an oversight or a "todo later" — do not add a `.github/workflows/`
+  file, and do not propose one. `make check` is the gate instead
+  (lint + format-check + lock-check + unit tests; the unit suite is
+  hermetic — no real `ffmpeg`/`mlx-vlm`/network — so it covers everything
+  except `tests/integration`).
+- **Not published to PyPI.** Personal-use tool, installed via
+  `uv tool install .` / `make install-tool` from a checkout. Hence no
+  `classifiers`/`keywords`/`[project.urls]` in `pyproject.toml` (PyPI
+  discovery metadata only). `readme`/`license`/`license-files` *are* set so
+  `uv build` produces a complete wheel, but that's for local/offline use,
+  not a release channel.
+- **Runtime deps carry lower bounds only** (`mlx-vlm>=…`, etc.), not upper
+  pins. `uv.lock` is the reproducibility mechanism for `uv sync`; the
+  floors exist solely because `uv tool install .` resolves from
+  `pyproject.toml` rather than the lock. Bump the floors to the locked
+  versions when `make update` moves them meaningfully.
+- **`[tool.uv] required-version` is pinned to one minor** (`>=0.12,<0.13`),
+  kept in lockstep with the `uv_build` pin in `[build-system]`. Bump both
+  together.
+
 ## Planned Improvements
 
 Ideas not yet implemented. Each should get a full write-up in
