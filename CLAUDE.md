@@ -34,10 +34,19 @@ full list. Notable targets:
   test-integration` (real `ffmpeg`/`qlmanage`/`mlx-vlm` against
   `tests/fixtures/footage/`, auto-skipped when empty)
 - Lint: `make lint` (`uv run ruff check .`, add `-fix` target variant to
-  auto-fix), `make format` / `make format-check` (`uv run ruff format .`)
-- `make check` runs lint + format-check + test together
+  auto-fix), `make format` / `make format-check` (`uv run ruff format .`).
+  `make fix` runs `lint-fix` + `format` in one shot.
+- `make check` runs lint + format-check + lock-check + test together
+- `make coverage` runs the unit tests under `pytest-cov` (term + `htmlcov/`
+  + `coverage.xml`); `make coverage-report` regenerates those reports from
+  the last run's data. `make audit` scans dependencies for known
+  vulnerabilities via `pip-audit`.
 - `make update` upgrades all dependencies and refreshes `uv.lock`;
-  `make outdated` lists what's behind
+  `make outdated` lists what's behind; `make lock-check` verifies `uv.lock`
+  is in sync with `pyproject.toml` without modifying it
+- `make install-tool` / `make reinstall-tool` install `slate` onto `PATH`
+  as a `uv` tool (`--compile-bytecode`, so the first run skips the
+  bytecode-compile step); `make uninstall-tool` removes it
 - Release process (each requires a clean working tree; `make help` prints
   a runnable example for every target):
   - `make bump-version PART=patch|minor|major` (default `patch`) — bumps
@@ -98,7 +107,10 @@ Module layout under `src/slate/`:
   prefix/suffix) + `max_file_name_length` truncation (truncates the
   caption only, never the original stem or prefix/suffix)
 - `inference.py` — model resolution/caching (defers to `huggingface_hub`'s
-  standard cache) + captioning
+  standard cache) + captioning. `mlx_vlm`/`huggingface_hub` are imported
+  lazily (module-level `None` placeholders populated by `_ensure_*_deps()`)
+  so non-captioning runs don't pay the ~0.9s import — see "Startup Time" in
+  `PROJECT_SPEC.md`; don't "tidy" those placeholders into normal imports
 - `mappings.py` — `rename_mappings.json` read/write + disambiguation
   (`_2`/`_3`... suffixes on output-name collisions) + `app_version`
   stamping/major-version-mismatch check
