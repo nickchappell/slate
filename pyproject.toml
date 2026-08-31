@@ -5,11 +5,18 @@ description = "Video image classifier Python CLI tool to add short descriptions 
 authors = [
     { name = "Nick Chappell", email = "nick@intronic.org" }
 ]
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.14"
+# Lower bounds only -- uv.lock pins exact versions for `uv sync`, but
+# `uv tool install .` resolves from here, not the lock, so without floors a
+# tool install would accept arbitrarily old releases. Bump these to the
+# locked versions whenever `make update` moves the floor meaningfully.
 dependencies = [
-    "mlx-vlm",
-    "rich",
-    "jinja2",
+    "mlx-vlm>=0.6.17",
+    "rich>=15.0.0",
+    "jinja2>=3.1.6",
 ]
 
 [project.scripts]
@@ -18,6 +25,10 @@ slate = "slate.cli:main"
 [build-system]
 requires = ["uv_build>=0.12.5,<0.13.0"]
 build-backend = "uv_build"
+
+[tool.uv]
+# Keep contributors on a uv that matches the pinned uv_build above.
+required-version = ">=0.12,<0.13"
 
 [dependency-groups]
 dev = [

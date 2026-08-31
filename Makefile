@@ -48,7 +48,7 @@ help:
 	@printf "                   $(GREEN)e.g. make run ARGS='--dry-run --input-dir footage'$(RESET)\n"
 	@printf "  $(CYAN)model-update-check$(RESET) Check the Hub for a newer model revision\n"
 	@printf "                   $(GREEN)e.g. make model-update-check$(RESET)\n"
-	@printf "  $(CYAN)build$(RESET)            Build the wheel + sdist into dist/ (uv build)\n"
+	@printf "  $(CYAN)build$(RESET)            Build the wheel + sdist into a fresh dist/ (uv build)\n"
 	@printf "                   $(GREEN)e.g. make build$(RESET)\n"
 	@printf "  $(CYAN)install-tool$(RESET)     Install slate on PATH as a uv tool (bytecode precompiled)\n"
 	@printf "                   $(GREEN)e.g. make install-tool$(RESET)\n"
@@ -123,6 +123,7 @@ model-update-check:
 	uv run slate --model-update-check
 
 build:
+	rm -rf dist
 	uv build
 
 install-tool:
