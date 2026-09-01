@@ -84,10 +84,14 @@ slate --input-dir ~/Movies/Footage --process-and-rename
   `slate` checks for them anyway as a defensive guard against unusual
   environments (minimal/managed images, stripped-down runners).
 - **[`uv`](https://docs.astral.sh/uv/)** for installing/running the tool.
+- **`make`** -- only needed for development (running the `Makefile` targets:
+  tests, lint, formatting, releases); not required to install or run
+  `slate` itself.
 
-All of the above are checked once at the start of every `slate` invocation
-(see "Preflight Checks" in `PROJECT_SPEC.md`); every problem is reported
-together, not one-at-a-time.
+The platform/`ffmpeg`/`ffprobe`/`qlmanage`/`sips` requirements above are
+checked once at the start of every `slate` invocation (see "Preflight
+Checks" in `PROJECT_SPEC.md`); every problem is reported together, not
+one-at-a-time.
 
 ### Installing `slate` onto your `$PATH`
 
