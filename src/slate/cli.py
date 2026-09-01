@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import tempfile
 from datetime import datetime
 from pathlib import Path
 
@@ -9,8 +10,8 @@ from rich.markup import escape
 from rich.prompt import Confirm
 
 from slate import output
-from slate.config import load_config
-from slate.extraction import ExtractionError, extract_frame
+from slate.config import DEFAULT_NUM_FRAMES_FOR_CAPTION, load_config
+from slate.extraction import ExtractionError, build_montage, extract_frames
 from slate.filenames import assemble_stem, normalize_caption, truncate_caption
 from slate.inference import check_for_model_updates, generate_caption
 from slate.mappings import (
@@ -73,6 +74,11 @@ _USAGE_EXAMPLES = [
     (
         "check for a newer revision of the model weights",
         "slate --model-update-check",
+    ),
+    (
+        "sample more frames per clip for a richer caption (default 3)",
+        "slate --input-dir ~/Movies/Footage --dry-run \\\n"
+        "      --num-frames-for-caption 5",
     ),
 ]
 
@@ -225,6 +231,20 @@ def build_parser() -> argparse.ArgumentParser:
             "default for this run only."
         ),
     )
+    parser.add_argument(
+        "--num-frames-for-caption",
+        type=int,
+        metavar="N",
+        help=(
+            "Number of frames sampled per clip and fed to the model "
+            "together for one caption (spread across the clip -- from 5%% "
+            "of the way through, evenly through the middle, up to 90%% of "
+            "the way through, avoiding the very start/end). Overrides the "
+            "config file's num_frames_for_caption key and the built-in default "
+            f"({DEFAULT_NUM_FRAMES_FOR_CAPTION}) for this run only. Must "
+            "be >= 1."
+        ),
+    )
 
     caption_position_group = parser.add_mutually_exclusive_group()
     caption_position_group.add_argument(
@@ -316,11 +336,25 @@ def _effective_settings(args: argparse.Namespace):
     prefix = args.prefix if args.prefix is not None else config.prefix
     suffix = args.suffix if args.suffix is not None else config.suffix
 
+    num_frames_for_caption = (
+        args.num_frames_for_caption
+        if args.num_frames_for_caption is not None
+        else config.num_frames_for_caption
+    )
+
     generate_undo = (
         False if args.skip_generate_undo_script else config.generate_undo_script
     )
 
-    return config, model, prepend, prefix, suffix, generate_undo
+    return (
+        config,
+        model,
+        prepend,
+        prefix,
+        suffix,
+        num_frames_for_caption,
+        generate_undo,
+    )
 
 
 def _run_preflight_or_exit() -> None:
@@ -368,6 +402,7 @@ def run_phase1(
     prefix: str,
     suffix: str,
     max_file_name_length: int,
+    num_frames_for_caption: int,
 ) -> tuple[list[MappingEntry], list[MappingEntry], list[MappingEntry]]:
     """Returns (all_entries, new_entries, skipped_entries)."""
     if files:
@@ -396,7 +431,8 @@ def run_phase1(
         match = find_existing_match(existing, original_files)
         if match is not None:
             output.skip(
-                f"already in rename_mappings.json: {' / '.join(original_files)}"
+                f"{' / '.join(original_files)}: skipping, already in "
+                "rename_mappings.json"
             )
             skipped_entries.append(match)
             all_entries.append(match)
@@ -416,26 +452,32 @@ def run_phase1(
 
         assert group.source_file is not None
         tmp_frame_path = review_dir / f".tmp.{group.source_file.stem}.jpg"
-        try:
-            extract_frame(group.source_file, tmp_frame_path)
-        except ExtractionError as e:
-            entry = MappingEntry(
-                status="error", original_files=original_files, error=str(e)
-            )
-            new_entries.append(entry)
-            all_entries.append(entry)
-            output.error(f"{' / '.join(original_files)}: {e}")
-            continue
+        with tempfile.TemporaryDirectory(prefix="slate-frames-") as raw_frames_dir:
+            try:
+                frame_paths = extract_frames(
+                    group.source_file, Path(raw_frames_dir), num_frames_for_caption
+                )
+            except ExtractionError as e:
+                entry = MappingEntry(
+                    status="error", original_files=original_files, error=str(e)
+                )
+                new_entries.append(entry)
+                all_entries.append(entry)
+                output.error(f"{' / '.join(original_files)}: {e}")
+                continue
 
-        if len(original_files) > 1:
-            output.processing(
-                f"Running image recognition on {' / '.join(original_files)} "
-                f"(frame from {group.source_file.name})..."
-            )
-        else:
-            output.processing(f"Running image recognition on {original_files[0]}...")
+            if len(original_files) > 1:
+                output.processing(
+                    f"Running image recognition on {' / '.join(original_files)} "
+                    f"(frame from {group.source_file.name})..."
+                )
+            else:
+                output.processing(
+                    f"Running image recognition on {original_files[0]}..."
+                )
 
-        raw_caption = generate_caption(str(tmp_frame_path), prompt, model)
+            raw_caption = generate_caption([str(p) for p in frame_paths], prompt, model)
+            build_montage(frame_paths, tmp_frame_path)
         caption = truncate_caption(normalize_caption(raw_caption))
 
         new_stem = assemble_stem(
@@ -727,9 +769,17 @@ def main(argv: list[str] | None = None) -> None:
 
         _run_preflight_or_exit()
 
-        config, model, prepend, prefix, suffix, generate_undo = _effective_settings(
-            args
-        )
+        (
+            config,
+            model,
+            prepend,
+            prefix,
+            suffix,
+            num_frames_for_caption,
+            generate_undo,
+        ) = _effective_settings(args)
+        if num_frames_for_caption < 1:
+            raise UsageError("--num-frames-for-caption must be >= 1")
 
         if args.dry_run:
             files, base_dir = _resolve_input_files(args)
@@ -746,13 +796,14 @@ def main(argv: list[str] | None = None) -> None:
                 prefix=prefix,
                 suffix=suffix,
                 max_file_name_length=config.max_file_name_length,
+                num_frames_for_caption=num_frames_for_caption,
             )
             output.console.print("\n[bold]Next steps:[/bold]")
             output.console.print(
                 f"  1. Review the captions: rename a JPEG in "
                 f"[cyan]{review_dir}/[/cyan] to correct it, or delete one to skip "
-                f"that file. (You can also hand-edit new_stem directly in "
-                f"[cyan]{mappings_path}[/cyan].)"
+                f"that file. (You can also hand-edit the [magenta]new_stem[/magenta] "
+                f"value for each file directly in [cyan]{mappings_path}[/cyan].)"
             )
             output.console.print(
                 "  2. Apply the renames: "
@@ -786,6 +837,7 @@ def main(argv: list[str] | None = None) -> None:
                 prefix=prefix,
                 suffix=suffix,
                 max_file_name_length=config.max_file_name_length,
+                num_frames_for_caption=num_frames_for_caption,
             )
             newly_processed_ok = [e for e in new_entries if e.status == "ok"]
             run_phase2(

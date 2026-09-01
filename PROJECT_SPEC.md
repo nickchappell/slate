@@ -280,23 +280,41 @@ constant upkeep as new camera RAW formats show up, where a live
 attempt-and-fallback doesn't.
 - Seek before decode (`-ss` before `-i`) for speed
 - Downscale during extraction, not after (avoid full-res intermediate)
-- **Single frame per clip, at a fixed timestamp** (`-ss 00:00:01` in the
-  example below) — one `ffmpeg`/`qlmanage` extraction, one VLM call, one
-  caption. An earlier version of this doc considered sampling 2–3 frames
-  across the clip for more robust captions on clips with significant
-  visual change (e.g. a pan), but that was dropped without being built:
-  it either depends on `mlx-vlm`'s Qwen2-VL-2B wrapper reliably accepting
-  multi-image input in one call (unconfirmed — Qwen2-VL's architecture
-  supports it, but whether this specific quantized build + `mlx-vlm`'s
-  API exposes it cleanly hasn't been tested), or requires captioning each
-  sampled frame separately and then deciding how to pick/merge 2–3
-  different resulting captions (unresolved, and 2–3x the inference cost
-  per clip). Neither is worth building speculatively for a personal-use
-  tool before real footage shows the single-frame approach actually
-  producing bad captions on panning/motion-heavy clips.
+- **`num_frames_for_caption` frames per clip (default 3), spread across the
+  clip, fed to the model together as one native multi-image call — one
+  caption.** `mlx-vlm` (confirmed against the installed `0.6.17`) does
+  accept a list for its `image` argument and a matching `num_images` on
+  `apply_chat_template`, and Qwen2-VL's `MODEL_CONFIG` entry in
+  `mlx_vlm.prompt_utils` is a genuine multi-image message format — not the
+  speculative "unconfirmed" state an earlier version of this doc described.
+  `inference.generate_caption()` takes `image_paths: list[str]` and passes
+  it straight through as `image=image_paths`/`num_images=len(image_paths)`;
+  no per-frame captioning + merge logic needed.
+  - **Frame positions** are fractions of clip duration (from `ffprobe`'s
+    `format=duration`), evenly spaced across `[0.0, 1.0]` and then each
+    clamped into `[MIN_FRAME_POSITION_FRACTION, MAX_FRAME_POSITION_FRACTION]`
+    = `[0.05, 0.9]` — landing right at the true start or end risks a
+    black/fade/empty frame outside the real content. For the default
+    `num_frames_for_caption=3` this produces exactly `[0.05, 0.5, 0.9]`
+    (only the two endpoints move; the true midpoint 0.5 is already in
+    range); `num_frames_for_caption=1` is a degenerate case, just
+    `MIN_FRAME_POSITION_FRACTION`. See `extraction._frame_position_fractions()`.
+  - **Configurable** via the `num_frames_for_caption` key in `config.toml`
+    or `--num-frames-for-caption N` (see Configuration, below, for
+    precedence — same pattern as `model`).
+  - **RAW-format fallback still yields exactly one frame per clip**:
+    `qlmanage -t` has no seek control (always grabs a fixed/poster frame),
+    so `extract_frames()` degrades to its single-frame `qlmanage`/`sips`
+    path for any clip ffmpeg can't decode, or whose duration `ffprobe`
+    can't read — same Step 2/Step 3 ladder as before, just applied once
+    per clip instead of once per requested frame (if the *first* `ffmpeg`
+    timestamp attempt fails, the whole clip falls back rather than
+    producing a partial/inconsistent frame set).
 
 ```bash
-ffmpeg -ss 00:00:01 -i input.mp4 -vframes 1 -vf scale=896:-1 frame.jpg
+# One of num_frames_for_caption calls, -ss position varying per frame
+# (0.05, 0.5, 0.9 fractions of duration for the default of 3 frames):
+ffmpeg -ss 00:00:01.234 -i input.mp4 -vframes 1 -vf scale=896:-1 frame_0.jpg
 ```
 
 **Optional hardware-accelerated variant for regular ProRes (not RAW):**
@@ -304,18 +322,23 @@ ffmpeg -ss 00:00:01 -i input.mp4 -vframes 1 -vf scale=896:-1 frame.jpg
 ffmpeg -hwaccel videotoolbox -i input.mov -vf scale=896:-1 -vframes 1 frame.jpg
 ```
 
-**Future design idea, not built — composite frame grid.** If single-frame
-captions turn out to miss real motion/content changes within a clip
-(panning shots being the obvious case), the simplest fix is *not* the
-multi-image-API or multi-caption-merge approaches ruled out above — it's
-extracting 2–3 frames as before, but **stitching them into one composite
-image** (e.g. side-by-side or in a grid, via `ffmpeg`'s `montage`/`hstack`
-filters or Pillow) and sending that single composite to the VLM. Still one
-image, one VLM call, one caption, no merge logic, no dependency on
-multi-image API support — because from the model's perspective it's just
-a picture with several panels in it. Noted here as a future option, not
-something to build until a single fixed-timestamp frame is actually shown
-to produce bad captions on real footage.
+**Review preview: a composited grid, decoupled from what the model sees.**
+`extraction.build_montage()` stitches the extracted frames into one
+left-to-right strip (`ffmpeg`'s `hstack` filter; a plain byte-copy when
+there's only one frame) and that composite — not the individual frames —
+becomes the single preview JPEG written to `review/` and hashed for
+`review_sync.py`'s human-rename detection. This is purely a review
+artifact: the model captions from the individual extracted frames
+directly (native multi-image), never from the montage, so montage
+compositing can never affect caption quality. The individual per-frame
+JPEGs live in a `tempfile.TemporaryDirectory()` for the duration of one
+clip's processing and are discarded once the montage is built — they're
+never persisted or referenced by `rename_mappings.json`, so no
+determinism guarantee is needed for them across separate runs, only for
+the review-facing montage's placement in Phase 1's already-existing
+skip-before-regenerate logic (a group already recorded in
+`rename_mappings.json` is never reprocessed — see Phase 1 step 2 — so
+the montage for a given group is built at most once, ever).
 
 > **Note on "ProRes" vs. "ProRes RAW":** per the Platform Constraint
 > section above, **regular ProRes decodes fine via ffmpeg/VideoToolbox —
@@ -625,9 +648,9 @@ that skips the review checkpoint — see Phase 3 below.
      — re-running `--dry-run` does not diff error causes, just file sets.
    - For every matched group: **skip extraction/captioning entirely** (no
      `ffmpeg`/`qlmanage` call, no VLM inference), print a line noting the
-     skip (e.g. `SKIP (already in rename_mappings.json): A017_C010_0806GC
-     AMBIENCE-SEASIDE - Long Wharf - Boston, MA.MOV / .MP4`), and carry
-     that entry into the output **unchanged** — its existing
+     skip (e.g. `A017_C010_0806GC.MOV / A017_C010_0806GC.MP4: skipping,
+     already in rename_mappings.json`), and carry that entry into the
+     output **unchanged** — its existing
      `new_stem`/`preview_jpeg`/`error` are preserved verbatim, not
      regenerated. This is what makes re-running `--dry-run` safe for
      hand-edited mapping files: since the skip check only looks at
@@ -1100,13 +1123,16 @@ flags > config file > built-in defaults.** The config file exists purely
 to avoid retyping the same flags across runs; it never becomes mandatory.
 `model` follows this same precedence via `--model REPO_ID`: CLI flag wins
 if passed, otherwise the config file's `model` key, otherwise the built-in
-default (`mlx-community/Qwen2-VL-2B-Instruct-4bit`).
+default (`mlx-community/Qwen2-VL-2B-Instruct-4bit`). `num_frames_for_caption`
+follows the identical pattern via `--num-frames-for-caption N` (see Frame
+Extraction Strategy, above); built-in default is `3`.
 
 **Known asymmetry:** `max_file_name_length` and `prompt` are the two config
 values with no corresponding CLI flag (see Filename Assembly and Model /
 Inference, above, respectively) — everything else in `config.toml`
 (`prepend_generated_name`/`prefix`/`suffix`, `model`,
-`generate_undo_script`) has a matching flag it can be overridden with.
+`num_frames_for_caption`, `generate_undo_script`) has a matching flag it
+can be overridden with.
 
 **Format:** TOML — matches `pyproject.toml`, human-editable with comments,
 unlike `rename_mappings.json`/`applied_renames_*.json` which are machine-written

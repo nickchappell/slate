@@ -50,15 +50,36 @@ class TestGenerateCaption:
         monkeypatch.setattr(inference, "vlm_generate", fake_generate)
 
         result = inference.generate_caption(
-            "/tmp/frame.jpg", "describe this", "some/model"
+            ["/tmp/frame.jpg"], "describe this", "some/model"
         )
 
         assert result == "a caption"
         assert calls["model"] == "some/model-model"
         assert calls["processor"] == "some/model-processor"
         assert calls["prompt"] == "templated:describe this"
-        assert calls["image"] == "/tmp/frame.jpg"
+        assert calls["image"] == ["/tmp/frame.jpg"]
         assert calls["kwargs"]["max_tokens"] == inference.MAX_CAPTION_TOKENS
+
+    def test_passes_num_images_matching_frame_count(self, monkeypatch):
+        _patch_generation_chain(monkeypatch)
+        num_images_seen = {}
+
+        def fake_apply_chat_template(processor, config, prompt, num_images):
+            num_images_seen["value"] = num_images
+            return f"templated:{prompt}"
+
+        monkeypatch.setattr(inference, "apply_chat_template", fake_apply_chat_template)
+        monkeypatch.setattr(
+            inference,
+            "vlm_generate",
+            lambda *a, **k: FakeGenerationResult("a caption"),
+        )
+
+        inference.generate_caption(
+            ["/tmp/a.jpg", "/tmp/b.jpg", "/tmp/c.jpg"], "describe this", "some/model"
+        )
+
+        assert num_images_seen["value"] == 3
 
     def test_model_is_loaded_once_and_cached_across_calls(self, monkeypatch):
         resolve_calls = []
@@ -72,8 +93,8 @@ class TestGenerateCaption:
             inference, "vlm_generate", lambda *a, **k: FakeGenerationResult("caption")
         )
 
-        inference.generate_caption("/tmp/a.jpg", "prompt", "same/model")
-        inference.generate_caption("/tmp/b.jpg", "prompt", "same/model")
+        inference.generate_caption(["/tmp/a.jpg"], "prompt", "same/model")
+        inference.generate_caption(["/tmp/b.jpg"], "prompt", "same/model")
 
         assert resolve_calls == ["same/model"]
 
@@ -89,8 +110,8 @@ class TestGenerateCaption:
             inference, "vlm_generate", lambda *a, **k: FakeGenerationResult("caption")
         )
 
-        inference.generate_caption("/tmp/a.jpg", "prompt", "model-a")
-        inference.generate_caption("/tmp/b.jpg", "prompt", "model-b")
+        inference.generate_caption(["/tmp/a.jpg"], "prompt", "model-a")
+        inference.generate_caption(["/tmp/b.jpg"], "prompt", "model-b")
 
         assert resolve_calls == ["model-a", "model-b"]
 

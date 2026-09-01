@@ -70,9 +70,10 @@ inference) is decoupled from the destructive step (renaming real footage),
 with a human review checkpoint in between:
 
 - **`--dry-run`** — discovers files, pairs MOV/MP4 by shared stem, extracts
-  a frame, captions it, and writes `review/rename_mappings.json` (a JSON
+  `num_frames_for_caption` frames per clip and captions them together in one
+  multi-image call, and writes `review/rename_mappings.json` (a JSON
   object — `app_version` + a list of `groups` — living inside `review/`
-  alongside the preview JPEGs it describes, not renaming anything).
+  alongside the composited preview JPEGs it describes, not renaming anything).
   Re-running `--dry-run` is safe/incremental: groups already present
   (matched by `original_files`) are skipped and carried over unchanged,
   regardless of prior `status`.
@@ -100,17 +101,23 @@ Module layout under `src/slate/`:
   "Language / Packaging" in `PROJECT_SPEC.md` for why) + phase orchestration
 - `config.py` — config file resolution/parsing; precedence is CLI flags >
   config file > built-in defaults
-- `extraction.py` — frame extraction fallback ladder: `ffmpeg` first, then
-  `qlmanage`+`sips` for RAW formats ffmpeg can't decode (attempt, not
-  predict — no static codec allowlist)
+- `extraction.py` — multi-frame extraction fallback ladder: `ffmpeg` (one
+  call per sampled frame position) first, then `qlmanage`+`sips` for RAW
+  formats ffmpeg can't decode, degrading to a single frame there since
+  `qlmanage` has no seek control (attempt, not predict — no static codec
+  allowlist); also builds the `review/`-facing composite preview JPEG
+  (`build_montage()`, `ffmpeg`'s `hstack`) from the sampled frames — a
+  review-only artifact, never fed to the model
 - `filenames.py` — filename assembly (prepend/append caption,
   prefix/suffix) + `max_file_name_length` truncation (truncates the
   caption only, never the original stem or prefix/suffix)
 - `inference.py` — model resolution/caching (defers to `huggingface_hub`'s
-  standard cache) + captioning. `mlx_vlm`/`huggingface_hub` are imported
-  lazily (module-level `None` placeholders populated by `_ensure_*_deps()`)
-  so non-captioning runs don't pay the ~0.9s import — see "Startup Time" in
-  `PROJECT_SPEC.md`; don't "tidy" those placeholders into normal imports
+  standard cache) + captioning from a list of frame paths in one native
+  multi-image call (`num_images=len(image_paths)`). `mlx_vlm`/
+  `huggingface_hub` are imported lazily (module-level `None` placeholders
+  populated by `_ensure_*_deps()`) so non-captioning runs don't pay the
+  ~0.9s import — see "Startup Time" in `PROJECT_SPEC.md`; don't "tidy"
+  those placeholders into normal imports
 - `mappings.py` — `rename_mappings.json` read/write + disambiguation
   (`_2`/`_3`... suffixes on output-name collisions) + `app_version`
   stamping/major-version-mismatch check
@@ -194,21 +201,7 @@ Ideas not yet implemented. Each should get a full write-up in
 `PROJECT_SPEC.md` (and a mention in README.md's "Technical Decisions and
 Opinions") when it lands.
 
-- **Multi-frame input for VLM inference.** Today `extraction.py` extracts a
-  single frame and `inference.py` captions it with `num_images=1`, so the
-  caption is only as good as that one grab (motion blur, a frame on a cut,
-  a subject facing away all poison it). Sample several frames spread across
-  the clip instead. Two ways to feed them:
-  - **Grid/montage** — tile the frames into one image. Robust (works with
-    any single-image model) and fixed at one image's worth of tokens, but
-    downsamples every frame (a 3x3 grid ~= 1/3 linear resolution per cell,
-    which hurts for reading slate markings / signage) and needs a prompt
-    that says "these are frames from one clip, describe the scene, not the
-    layout."
-  - **Native multi-image** — `apply_chat_template(..., num_images=n)` +
-    `image=[...]`. Keeps every frame full-resolution; higher quality when
-    the installed `mlx-vlm` + model support it reliably. Qwen2-VL also has
-    real video-input support worth evaluating here.
-
-  Prototype both and compare caption quality on real footage in
-  `tests/fixtures/footage/` before committing to one.
+None currently open. (Multi-frame input for VLM inference — sampling
+several frames per clip, fed to the model as one native multi-image call,
+with a composited left-to-right strip as the review-only preview JPEG —
+landed; see "Frame Extraction Strategy" in `PROJECT_SPEC.md`.)

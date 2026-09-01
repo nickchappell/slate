@@ -135,10 +135,13 @@ per invocation:
 
 ### Phase 1 -- `--dry-run`
 
-Scans for footage, pairs `.MOV`/`.MP4` files, extracts a frame per clip,
-generates a caption, and writes a `review/` folder containing
-`rename_mappings.json` and the captioned preview JPEGs. **Never renames or
-modifies your source files.**
+Scans for footage, pairs `.MOV`/`.MP4` files, samples several frames per clip
+(3 by default, configurable via `num_frames_for_caption`/
+`--num-frames-for-caption`), generates one caption from all of them together,
+and writes a `review/` folder containing `rename_mappings.json` and the
+captioned preview JPEGs -- each preview is a left-to-right strip of the
+sampled frames, for review purposes only. **Never renames or modifies your
+source files.**
 
 ```bash
 slate --input-dir ~/Movies/Footage --dry-run
@@ -269,24 +272,30 @@ implement video decoding, image processing, or caption generation itself:
    source, since 6K ProRes RAW buys no captioning-accuracy benefit -- the VLM
    resizes internally regardless of source resolution -- and only slows down
    frame extraction.
-3. **Frame extraction, with a fallback ladder.** A single frame is pulled
-   from a fixed timestamp per clip:
+3. **Frame extraction, with a fallback ladder.** `num_frames_for_caption`
+   frames (3 by default) are pulled per clip, spread across it -- from 5% of
+   the way through, evenly through the middle, up to 90% of the way through
+   (avoiding the very start/end, to dodge a black/fade-in/empty frame there):
    - **First**, plain `ffmpeg` -- works for H.264/H.265 and regular ProRes
      (via VideoToolbox), but **cannot decode ProRes RAW** (no decoder exists
      for it, hardware or software).
-   - **If that fails**, `qlmanage` (macOS's QuickLook thumbnail generator,
-     backed by AVFoundation) -- this is what actually handles ProRes RAW and
-     other camera-manufacturer RAW formats. `qlmanage` always emits PNG
-     regardless of the requested filename, so the result is converted to
-     JPEG with `sips`.
+   - **If that fails** (or the clip's duration can't be read at all),
+     `qlmanage` (macOS's QuickLook thumbnail generator, backed by
+     AVFoundation) -- this is what actually handles ProRes RAW and other
+     camera-manufacturer RAW formats. `qlmanage` has no seek control, so
+     this fallback always yields exactly one frame regardless of
+     `num_frames_for_caption`. `qlmanage` always emits PNG regardless of the
+     requested filename, so the result is converted to JPEG with `sips`.
    - **If both fail**, the clip is marked as an `"error"` group in
      `rename_mappings.json` and the rest of the batch continues -- one undecodable
      clip never halts a run.
-4. **Captioning (`mlx-vlm` + Qwen2-VL-2B).** The extracted frame is sent to a
-   local vision-language model with a prompt engineered to produce a short,
-   lowercase phrase rather than a full descriptive sentence (instruction-
-   tuned VLMs default to verbose, scene-setting output unless explicitly
-   steered away from it). A fixed generation-time token cap backstops the
+4. **Captioning (`mlx-vlm` + Qwen2-VL-2B).** The sampled frames are sent to a
+   local vision-language model *together*, as one native multi-image call, to
+   produce a single caption -- not captioned individually and merged. The
+   prompt is engineered to produce a short, lowercase phrase rather than a
+   full descriptive sentence (instruction-tuned VLMs default to verbose,
+   scene-setting output unless explicitly steered away from it). A fixed
+   generation-time token cap backstops the
    prompt's word-count request, since no prompt wording reliably bounds
    output length on its own.
 5. **Normalization and assembly.** Raw model output is defensively cleaned up
@@ -475,11 +484,19 @@ thumbnailer, backed by AVFoundation -- converting its PNG output to JPEG with
 `sips`. This ladder generalizes to other RAW formats (RED `.r3d`,
 Blackmagic `.braw`, etc.) for free, as long as the user has the relevant
 vendor's QuickLook plugin installed, since `qlmanage` does no decoding of
-its own. One frame per clip, at a fixed timestamp -- multi-frame sampling
-was considered and dropped as unjustified complexity (unclear `mlx-vlm`
-multi-image support, and no clear way to merge multiple per-frame captions)
-until real footage actually shows single-frame captions missing meaningful
-content on panning/motion-heavy clips.
+its own. `num_frames_for_caption` frames per clip (3 by default), spread
+across it as fractions of duration -- clamped into [5%, 90%] (from 5% of the
+way through, evenly through the middle, up to 90%), to avoid a
+black/fade-in/empty frame at either the true start or end -- fed to the VLM
+together as one native multi-image call for a single caption (confirmed
+against `mlx-vlm` 0.6.17: Qwen2-VL genuinely supports multi-image input via
+`apply_chat_template(..., num_images=n)` + a list `image=[...]`, no per-frame
+captioning + merge logic needed). The `qlmanage` RAW fallback has no seek
+control, so it still yields exactly one frame regardless of
+`num_frames_for_caption`. The review-facing preview JPEG in `review/` is a
+separate left-to-right composite of the sampled frames (`ffmpeg`'s `hstack`)
+-- purely for human review, never fed back into captioning, so it can't
+affect caption quality.
 
 **Caption generation and normalization.** Instruction-tuned VLMs default to
 verbose, scene-setting prose unless explicitly steered away from it -- a

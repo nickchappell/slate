@@ -134,7 +134,7 @@ def _load_model(model_repo: str, check_for_updates: bool = False):
 
 
 def generate_caption(
-    image_path: str,
+    image_paths: list[str],
     prompt: str,
     model_repo: str,
     *,
@@ -143,12 +143,14 @@ def generate_caption(
     _ensure_mlx_deps()
 
     model, processor, config = _load_model(model_repo, check_for_updates)
-    formatted_prompt = apply_chat_template(processor, config, prompt, num_images=1)
+    formatted_prompt = apply_chat_template(
+        processor, config, prompt, num_images=len(image_paths)
+    )
     result = vlm_generate(
         model,
         processor,
         formatted_prompt,
-        image=image_path,
+        image=image_paths,
         max_tokens=MAX_CAPTION_TOKENS,
         temperature=0.0,
         verbose=False,

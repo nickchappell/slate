@@ -1,4 +1,5 @@
 import argparse
+from pathlib import Path
 
 import pytest
 
@@ -123,6 +124,7 @@ class TestEffectiveSettings:
             append_generated_name=False,
             prefix=None,
             suffix=None,
+            num_frames_for_caption=None,
             skip_generate_undo_script=False,
         )
         base.update(overrides)
@@ -137,13 +139,20 @@ class TestEffectiveSettings:
             config_module, "DEFAULT_CONFIG_PATH", tmp_path / "config.toml"
         )
         args = self._base_args()
-        config, model, prepend, prefix, suffix, generate_undo = _effective_settings(
-            args
-        )
+        (
+            config,
+            model,
+            prepend,
+            prefix,
+            suffix,
+            num_frames_for_caption,
+            generate_undo,
+        ) = _effective_settings(args)
         assert model == config.model
         assert prepend is False
         assert prefix == ""
         assert suffix == ""
+        assert num_frames_for_caption == config.num_frames_for_caption
         assert generate_undo is True
 
     def test_cli_model_overrides_config(self, tmp_path, monkeypatch):
@@ -162,12 +171,34 @@ class TestEffectiveSettings:
         _config, model, *_ = _effective_settings(args)
         assert model == "config-model"
 
+    def test_cli_num_frames_for_caption_overrides_config(self, tmp_path, monkeypatch):
+        config_file = tmp_path / "config.toml"
+        config_file.write_text("[defaults]\nnum_frames_for_caption = 5\n")
+        monkeypatch.setenv(CONFIG_ENV_VAR, str(config_file))
+        args = self._base_args(num_frames_for_caption=1)
+        _config, _model, _prepend, _prefix, _suffix, num_frames, _undo = (
+            _effective_settings(args)
+        )
+        assert num_frames == 1
+
+    def test_config_num_frames_for_caption_used_when_no_cli_override(
+        self, tmp_path, monkeypatch
+    ):
+        config_file = tmp_path / "config.toml"
+        config_file.write_text("[defaults]\nnum_frames_for_caption = 5\n")
+        monkeypatch.setenv(CONFIG_ENV_VAR, str(config_file))
+        args = self._base_args()
+        _config, _model, _prepend, _prefix, _suffix, num_frames, _undo = (
+            _effective_settings(args)
+        )
+        assert num_frames == 5
+
     def test_cli_prepend_flag_overrides_config(self, tmp_path, monkeypatch):
         config_file = tmp_path / "config.toml"
         config_file.write_text("[defaults]\nprepend_generated_name = false\n")
         monkeypatch.setenv(CONFIG_ENV_VAR, str(config_file))
         args = self._base_args(prepend_generated_name=True)
-        _config, _model, prepend, _prefix, _suffix, _undo = _effective_settings(args)
+        _config, _model, prepend, *_ = _effective_settings(args)
         assert prepend is True
 
     def test_cli_append_flag_overrides_config_prepend_true(self, tmp_path, monkeypatch):
@@ -459,12 +490,21 @@ class TestRunPhase1PreviewHash:
     def test_preview_jpeg_sha256_matches_the_written_file(self, tmp_path, monkeypatch):
         source = touch(tmp_path / "a.MOV")
         monkeypatch.setattr(cli, "validate_media_files", lambda files: (files, []))
+
+        def fake_extract_frames(source, output_dir, num_frames):
+            frame = output_dir / "frame_0.jpg"
+            frame.write_bytes(b"fake-frame-bytes")
+            return [frame]
+
+        monkeypatch.setattr(cli, "extract_frames", fake_extract_frames)
+        monkeypatch.setattr(cli, "generate_caption", lambda *a, **k: "a caption")
         monkeypatch.setattr(
             cli,
-            "extract_frame",
-            lambda source, output: output.write_bytes(b"fake-frame-bytes"),
+            "build_montage",
+            lambda frame_paths, output_jpeg: output_jpeg.write_bytes(
+                b"fake-montage-bytes"
+            ),
         )
-        monkeypatch.setattr(cli, "generate_caption", lambda *a, **k: "a caption")
 
         review_dir = tmp_path / "review"
         mappings_path = review_dir / "rename_mappings.json"
@@ -480,6 +520,7 @@ class TestRunPhase1PreviewHash:
             prefix="",
             suffix="",
             max_file_name_length=255,
+            num_frames_for_caption=3,
         )
 
         assert len(new_entries) == 1
@@ -499,15 +540,22 @@ class TestRunPhase1PreviewHash:
         a = touch(tmp_path / "a.MOV")
         a_b = touch(tmp_path / "a b.MOV")
 
-        def fake_extract_frame(source, output):
-            output.write_bytes(f"frame-for-{source.stem}".encode())
+        def fake_extract_frames(source, output_dir, num_frames):
+            frame = output_dir / "frame_0.jpg"
+            frame.write_bytes(f"frame-for-{source.stem}".encode())
+            return [frame]
 
-        def fake_generate_caption(frame_path, prompt, model):
-            return "c" if frame_path.endswith(".tmp.a b.jpg") else "b c"
+        def fake_generate_caption(image_paths, prompt, model):
+            content = Path(image_paths[0]).read_bytes().decode()
+            return "c" if content == "frame-for-a b" else "b c"
+
+        def fake_build_montage(frame_paths, output_jpeg):
+            output_jpeg.write_bytes(frame_paths[0].read_bytes())
 
         monkeypatch.setattr(cli, "validate_media_files", lambda files: (files, []))
-        monkeypatch.setattr(cli, "extract_frame", fake_extract_frame)
+        monkeypatch.setattr(cli, "extract_frames", fake_extract_frames)
         monkeypatch.setattr(cli, "generate_caption", fake_generate_caption)
+        monkeypatch.setattr(cli, "build_montage", fake_build_montage)
 
         review_dir = tmp_path / "review"
         mappings_path = review_dir / "rename_mappings.json"
@@ -523,6 +571,7 @@ class TestRunPhase1PreviewHash:
             prefix="",
             suffix="",
             max_file_name_length=255,
+            num_frames_for_caption=3,
         )
 
         assert len(new_entries) == 2

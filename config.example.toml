@@ -52,3 +52,10 @@ Example output: waves crashing on rocky shore
 # PROJECT_SPEC.md for the exact rule and a known caveat about multi-byte
 # characters.
 max_file_name_length = 255
+
+# Number of frames sampled per clip and fed to the model together as one
+# multi-image call for a single caption -- spread across the clip (from 5%
+# of the way through, evenly through the middle, up to 90% of the way
+# through, avoiding the very start/end). See "Frame Extraction Strategy" in
+# PROJECT_SPEC.md. Overridable per-run with --num-frames-for-caption N.
+num_frames_for_caption = 3

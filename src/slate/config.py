@@ -10,6 +10,7 @@ DEFAULT_CONFIG_PATH = Path.home() / ".config" / "slate" / "config.toml"
 
 DEFAULT_MODEL = "mlx-community/Qwen2-VL-2B-Instruct-4bit"
 DEFAULT_MAX_FILE_NAME_LENGTH = 255  # APFS per-path-component limit, in characters
+DEFAULT_NUM_FRAMES_FOR_CAPTION = 3
 
 DEFAULT_PROMPT = """\
 Describe the main subject and action in this frame in 5 to 8 words.
@@ -29,6 +30,7 @@ class Config:
     model: str = DEFAULT_MODEL
     prompt: str = DEFAULT_PROMPT
     max_file_name_length: int = DEFAULT_MAX_FILE_NAME_LENGTH
+    num_frames_for_caption: int = DEFAULT_NUM_FRAMES_FOR_CAPTION
 
 
 def resolve_config_path() -> Path:
@@ -69,5 +71,8 @@ def load_config(path: Path | None = None) -> Config:
         prompt=table.get("prompt", base.prompt),
         max_file_name_length=table.get(
             "max_file_name_length", base.max_file_name_length
+        ),
+        num_frames_for_caption=table.get(
+            "num_frames_for_caption", base.num_frames_for_caption
         ),
     )

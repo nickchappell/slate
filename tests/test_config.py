@@ -44,6 +44,7 @@ class TestLoadConfig:
             model = "some-other/model"
             prompt = "custom prompt text"
             max_file_name_length = 100
+            num_frames_for_caption = 5
             """
         )
         result = load_config(config_file)
@@ -54,6 +55,7 @@ class TestLoadConfig:
         assert result.model == "some-other/model"
         assert result.prompt == "custom prompt text"
         assert result.max_file_name_length == 100
+        assert result.num_frames_for_caption == 5
 
     def test_partial_overrides_fall_back_to_defaults(self, tmp_path):
         config_file = tmp_path / "config.toml"
@@ -70,6 +72,7 @@ class TestLoadConfig:
         assert result.model == defaults.model
         assert result.prompt == defaults.prompt
         assert result.max_file_name_length == defaults.max_file_name_length
+        assert result.num_frames_for_caption == defaults.num_frames_for_caption
 
     def test_missing_defaults_table_returns_defaults(self, tmp_path):
         config_file = tmp_path / "config.toml"
