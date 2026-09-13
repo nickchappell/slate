@@ -311,8 +311,8 @@ alongside whatever argparse grouping covers the simpler pairs.
 
 Raised after the flags above were first drafted — the opt-in/off-by-default
 core is right (existing scripts calling `slate` shouldn't get new behavior
-or new requirements just because this feature exists), but four follow-on
-questions came out of reviewing it critically:
+or new requirements just because this feature exists). Four follow-on
+questions came out of reviewing it critically; all four are now decided:
 
 1. **Silent non-write footgun — decided.** Because `--add-metadata` must
    be re-passed at apply time, it's easy to generate `long_caption`/
@@ -343,14 +343,28 @@ questions came out of reviewing it critically:
    `--metadata-backfill`, accepted because it's a one-line `brew install`
    and keeps `preflight.py` simple rather than needing mode-awareness
    threaded into it. (Full detail under "Writing mechanism" above.)
-4. **Config-file default for `--add-metadata` — not yet decided, not
-   urgent.** Config precedence is CLI flags > config file > defaults
-   (`config.py`). A persistent `add_metadata = true` in `config.toml`
-   would remove the per-invocation friction for a user who always wants
-   metadata, but reintroduces the "behavior changes without an explicit
-   flag on this invocation" risk that made the flag opt-in in the first
-   place, for anything that relies on config defaults rather than passing
-   flags explicitly. Flagged as a real question, not resolved.
+4. **Config-file default for `--add-metadata` — decided.** Add
+   `add_metadata: bool = False` to the `Config` dataclass in `config.py`
+   and its `[defaults]` table loading, exactly mirroring the existing
+   `prepend_generated_name` field (same boolean style: lowercase
+   `true`/`false` in TOML, plain `store_true` CLI flag with no negation
+   counterpart, precedence resolved the same way — `if
+   args.add_metadata: True else: config.add_metadata`, per `cli.py`'s
+   existing pattern around line 329). **Default is `False` at every
+   layer** — the dataclass default, the behavior when `add_metadata` is
+   absent from `config.toml`, and the CLI flag's absence — so the field
+   exists for completeness/future flexibility without reintroducing the
+   surprise-behavior risk: an unset config still behaves exactly like
+   today. (Note: there's no per-setting env var override anywhere in
+   `config.py` — `SLATE_CONFIG` only relocates *which* config file gets
+   read, it doesn't override individual fields — so "default off" only
+   has two layers to actually set: the dataclass default and the CLI
+   flag's default-absent state; config file just needs the field to be
+   optional with that same `False` fallback.) The owner isn't setting
+   `add_metadata = true` in their own `config.toml` either — existing
+   scripts/tools that call `slate` get `--add-metadata` added explicitly
+   wherever it's actually wanted, so no invocation anywhere starts writing
+   metadata without an explicit flag on that specific call.
 
 ## Where this runs in the pipeline
 
