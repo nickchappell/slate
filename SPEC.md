@@ -209,6 +209,52 @@ default. Practical implications:
   process-startup overhead actually shows up as real cost, not a starting
   point.
 
+## Pre-write collision check: don't clobber pre-existing Title/Description/Keywords
+
+Raised as a follow-up: does writing Title/Description/Keywords/
+`com.slate.*` risk overwriting existing camera-manufacturer metadata?
+
+**Structurally safe regardless of manufacturer:** exiftool's writes are
+surgical — it only touches tags explicitly named on the command line
+(`-Title=`, `-Description=`, `-Keywords=`, the `com.slate.*` custom keys),
+never wiping anything else (nothing in this plan uses `-all=` or an
+equivalent blanket clear). So `make`/`model`/`creationdate`/
+`location.ISO6709` and any vendor-proprietary tracks (GoPro GPMF
+telemetry, DJI-specific atoms, etc.) stay untouched no matter the camera —
+this is a property of exiftool + the container format, not something that
+varies maker to maker.
+
+**Not structurally safe, and does need checking: the three fields actually
+being written might already be non-empty.** Camera-original footage
+straight off a card typically has empty Title/Description/Keywords
+(cameras don't usually populate these at capture time), but it's not
+guaranteed — and backfill mode specifically runs on files that already
+went through at least one prior processing pass, so there's more
+opportunity for some other tool to have written something there already.
+No reliable claim can be made across every manufacturer/firmware/workflow
+without actually checking real footage.
+
+**Decided mitigation: read-before-write, preserve-then-overwrite.**
+1. Before the write call for a given file, read its current `Title`/
+   `Description`/`Keywords` first (a single exiftool read call, or folded
+   into the write invocation via `-if` conditionals rather than a separate
+   subprocess round-trip, if exiftool supports that cleanly — confirm at
+   implementation time).
+2. If a field comes back non-empty, preserve its pre-existing value into a
+   matching `com.slate.*` provenance field *before* overwriting it —
+   `com.slate.original-title`, `com.slate.original-description`,
+   `com.slate.original-keywords` — mirroring how
+   `com.slate.original-filename` already captures pre-rename state. This
+   keeps the operation non-destructive to information even though the
+   visible field's value changes; applies independently per field (e.g. a
+   file with a pre-existing Title but empty Description/Keywords only
+   needs the Title preserved).
+3. Empty fields write normally — nothing to preserve.
+
+**Where this runs:** both entry points that write metadata — the main
+flow (Phase 2's rename-execution loop) and backfill mode's apply step —
+since both ultimately call the same exiftool write mechanism.
+
 ## `rename_mappings.json` schema changes
 
 New fields on `MappingEntry` (`mappings.py`), `status == "ok"` only:
