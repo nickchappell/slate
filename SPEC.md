@@ -259,6 +259,95 @@ when the JPEG wasn't separately touched.
   throughout. Noting this only so a future reader doesn't get confused by
   scrollback if this doc is ever read alongside the original conversation.)
 
+## Backfill mode: embedding metadata into already-renamed files
+
+**Decided: option 2 from the design discussion** — a dedicated review
+file, `review/metadata_changes.json`, gates this the same way
+`rename_mappings.json` gates a rename, even though this mode never
+touches filenames.
+
+**Use case:** files that were already captioned and renamed by slate in a
+past run (before this feature existed), sitting in known folders. Goal:
+regenerate LONG + KEYWORDS via a fresh VLM pass, take SHORT/Title straight
+from the file's current name (no parsing needed — see the Title design
+above, it was already meant to be read live from whatever the file is
+currently named), and write it all in as metadata. No renaming involved.
+
+**Why this is a distinct mode, not a variant of Phase 1/2:** almost none
+of the rename-specific machinery applies — no `filenames.py`/
+`assemble_stem()`, no `rename.py` execution, no disambiguation, no
+`review_sync.py` JPEG-hash reconciliation (there's no filename being
+edited via JPEG rename in this flow; SHORT/Title isn't editable at all
+here, it's just whatever the file is already named). What *does* carry
+over unmodified: `pairing.py` (still groups by shared stem — both files in
+an original pair still share the renamed stem) and `extraction.py` (frame
+sampling doesn't care about filenames).
+
+**Prompt variant:** drop the `SHORT:` section entirely for this mode —
+no reason to spend decode tokens on a caption that gets discarded:
+```
+Analyze this clip and respond in exactly this format:
+LONG: <one to two sentences>
+KEYWORDS: <6-10 comma-separated single words or short phrases...>
+```
+
+**`review/metadata_changes.json` schema** — same `{"app_version": ...,
+"groups": [...]}` top-level shape as `rename_mappings.json` (reuse
+`major_version_mismatch`/versioning machinery), but each group entry
+(`status == "ok"`) is:
+
+- `current_files: list[str]` — the already-renamed file(s) in this group.
+  Named `current_files`, deliberately **not** `original_files` like
+  `rename_mappings.json` uses — these are the files as they exist *now*,
+  post-rename; there's no earlier "original" name recorded here (unless a
+  prior run already embedded `com.slate.original-filename`, which is a
+  separate concern from this JSON's own field naming).
+- `title: str` — informational only, populated at generation time from
+  the current filename stem so the review JSON is self-documenting.
+  **Not authoritative** — consistent with the Title design decided above
+  (always derived live, never trusted from storage), the apply step
+  re-reads the real file's current name fresh rather than trusting this
+  field, in case the file got renamed again between generate and apply.
+  Not meant to be hand-edited here; if a different title is wanted, rename
+  the file directly and re-run generation.
+- `long_caption: str` — proposed, human-editable.
+- `keywords: list[str]` — proposed, human-editable.
+- `preview_jpeg: str` — composited preview JPEG via the existing
+  `build_montage()`, same rationale as Phase 1's preview: let a human
+  sanity-check LONG/KEYWORDS against the actual footage without opening
+  the video.
+- `source_used_for_caption: str` — mirrors `rename_mappings.json`'s field
+  (which paired file was used as the captioning source).
+- `status`/`error` — same "ok"/"error" pattern as `MappingEntry`.
+
+**Two-step flow, mirroring Phase 1 → Phase 2's shape:**
+1. **Generate** (proposed flags: `--embed-metadata-dry-run
+   --input-dir=...`, reusing the existing input-selection flags) — scans
+   the given files/dir, re-runs pairing + extraction + the 2-section VLM
+   prompt, writes `review/metadata_changes.json` + preview JPEGs. No
+   writes to the real files. Incremental/re-runnable the same way Phase 1
+   is: groups already present (matched by `current_files`) get skipped and
+   carried over, regardless of prior `status`.
+2. **Apply** (proposed flags: `--embed-metadata
+   --metadata-mappings=review/metadata_changes.json`) — re-checks every
+   file still exists, re-derives `title` live from each file's actual
+   current name (not from the JSON), confirms, then writes Title/
+   Description/Keywords + the `com.slate.*` provenance fields via
+   exiftool. On success, archives the mapping file in place to
+   `applied_metadata_changes_<timestamp>.json`, matching the
+   `applied_renames_<timestamp>.json` audit-trail convention.
+
+**Idempotency:** worth adding a check (via an exiftool read) to skip files
+that already carry `com.slate.*` provenance tags from a prior apply, as a
+safety net beyond the JSON-based carried-over-group skip — covers the case
+where `metadata_changes.json` itself was deleted/archived between runs but
+the target files were already processed.
+
+**Same disk/I/O caveat as the main design applies here too** — nothing
+different about this mode changes the earlier `-overwrite_original`
+disk-doubling tradeoff or the whole-file-rewrite cost; it's the same
+exiftool mechanics, just reached via a different entry point.
+
 ## Open questions / not yet decided
 
 - Module structure: new `metadata.py` (parallel to `rename.py`,
@@ -282,6 +371,15 @@ when the JPEG wasn't separately touched.
   probably after "Filename Assembly" and before "Workflow Modes," since
   Phase 2's description will need to reference it) and README's "Technical
   Decisions and Opinions," then delete this file.
+- Backfill mode flag names (`--embed-metadata-dry-run`/`--embed-metadata
+  --metadata-mappings=...` above are placeholders) — finalize once the
+  main-flow flags are settled, for naming consistency.
+- Backfill mode's `-overwrite_original` vs. keeping `_original` backups:
+  same open tradeoff as the main flow, not yet decided either place.
+- Whether the `com.slate.*`-tag idempotency check (backfill mode) needs an
+  exiftool *read* call per candidate file before the VLM pass, or can be
+  folded into the same invocation as the eventual write — affects whether
+  it costs an extra subprocess call per file.
 
 ## Next steps to pick this back up
 
