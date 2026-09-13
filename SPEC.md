@@ -311,29 +311,30 @@ alongside whatever argparse grouping covers the simpler pairs.
 
 Raised after the flags above were first drafted — the opt-in/off-by-default
 core is right (existing scripts calling `slate` shouldn't get new behavior
-or new requirements just because this feature exists), but three follow-on
+or new requirements just because this feature exists), but four follow-on
 questions came out of reviewing it critically:
 
-1. **Silent non-write footgun — still open, owner reconsidering.**
-   Because `--add-metadata` must be re-passed at apply time, it's easy to
-   generate `long_caption`/`keywords` via `--dry-run --add-metadata`, then
-   later run `--rename-only --rename-mappings=...` *without* the flag by
-   mistake. What should happen isn't yet decided, but silently renaming
-   and skipping metadata with no error is the leading candidate for "don't
-   do this" — a loud warning when a loaded mapping has `long_caption`/
-   `keywords` present but `--add-metadata` wasn't passed seems safer than
-   silence, regardless of what else changes.
-2. **Hard error vs. warn-and-skip when required fields are missing — still
-   open, owner reconsidering.** The earlier call (`--rename-only
-   --add-metadata` hard-aborts the whole batch if `long_caption`/
-   `keywords` are missing from an "ok" group) may be disproportionate —
-   it blocks an otherwise-legitimate rename over a metadata-only problem.
-   The project's existing precedent for a comparable partial-failure case
-   (the MOV/MP4 pair-deletion edge case) is "warning + skip," not abort;
-   skipping metadata for the affected groups while letting the rename
-   proceed would preserve the "`--rename-only` never touches `mlx_vlm`"
-   invariant just as well as aborting does, without making renames newly
-   blockable by a metadata misconfiguration. Not decided either way yet.
+1. **Silent non-write footgun — decided.** Because `--add-metadata` must
+   be re-passed at apply time, it's easy to generate `long_caption`/
+   `keywords` via `--dry-run --add-metadata`, then later run `--rename-only
+   --rename-mappings=...` *without* the flag by mistake. Resolved: if a
+   loaded mapping file has `long_caption`/`keywords` present on one or more
+   "ok" groups but `--add-metadata` wasn't passed at apply time, warn
+   loudly about it (via `output.py`, not a silent no-op) — the rename
+   still proceeds, but the warning makes clear metadata was generated for
+   this batch and is *not* being written this run.
+2. **Hard error vs. warn-and-skip when required fields are missing —
+   decided.** The earlier call (`--rename-only --add-metadata` hard-aborts
+   the whole batch if `long_caption`/`keywords` are missing from an "ok"
+   group) is replaced: follow the project's existing precedent for a
+   comparable partial-failure case (the MOV/MP4 pair-deletion edge case is
+   "warning + skip," not abort). So: warn, skip metadata-writing for the
+   affected groups specifically, and let the rename proceed for all groups
+   (including the affected ones — only the metadata step is skipped, not
+   the rename). This still preserves the "`--rename-only` never touches
+   `mlx_vlm`" invariant (skipping isn't touching it), without making an
+   otherwise-legitimate rename batch newly blockable by a metadata
+   misconfiguration.
 3. **`exiftool` preflight requirement — decided.** Add it to
    `preflight.py`'s binary checks unconditionally, same flat/unconditional
    shape as the existing checks, required for every invocation regardless
