@@ -191,11 +191,17 @@ default. Practical implications:
   general knowledge.
 
 **New dependency housekeeping, if this proceeds:**
-- Add to `preflight.py`'s binary checks, alongside `ffmpeg`/`ffprobe`/
-  `qlmanage`/`sips` (Homebrew: `brew install exiftool`).
+- **Decided:** add to `preflight.py`'s binary checks unconditionally,
+  alongside `ffmpeg`/`ffprobe`/`qlmanage`/`sips` (Homebrew: `brew install
+  exiftool`) — required for every invocation regardless of whether
+  `--add-metadata`/`--metadata-backfill` is used, matching the existing
+  flat/unconditional shape of `run_preflight_checks()` (no mode-awareness
+  needed there). Trade-off accepted deliberately: it's a hard requirement
+  for installation even for users who never touch metadata ops, but it's
+  a one-line `brew install` and keeps preflight simple/uniform rather than
+  needing to thread flag/mode info into it.
 - Add to README's required-tools list, matching how `make` was added
-  there (see recent commit `1cac43b`) — note whether it's required for all
-  users or only those opting into metadata embedding.
+  there (see recent commit `1cac43b`).
 - Plain `subprocess.run([...])` per file is fine at slate's batch scale
   (dozens of clips, not thousands) — same pattern as `extraction.py`'s
   ffmpeg calls. `PyExifTool`'s "stay open" mode (one persistent process,
@@ -300,6 +306,50 @@ Decided in this conversation:
 `--metadata-backfill` conflicts with three specific other flags) — likely
 needs manual post-parse validation in `cli.py` (`parser.error(...)`)
 alongside whatever argparse grouping covers the simpler pairs.
+
+### Flag-safety review
+
+Raised after the flags above were first drafted — the opt-in/off-by-default
+core is right (existing scripts calling `slate` shouldn't get new behavior
+or new requirements just because this feature exists), but three follow-on
+questions came out of reviewing it critically:
+
+1. **Silent non-write footgun — still open, owner reconsidering.**
+   Because `--add-metadata` must be re-passed at apply time, it's easy to
+   generate `long_caption`/`keywords` via `--dry-run --add-metadata`, then
+   later run `--rename-only --rename-mappings=...` *without* the flag by
+   mistake. What should happen isn't yet decided, but silently renaming
+   and skipping metadata with no error is the leading candidate for "don't
+   do this" — a loud warning when a loaded mapping has `long_caption`/
+   `keywords` present but `--add-metadata` wasn't passed seems safer than
+   silence, regardless of what else changes.
+2. **Hard error vs. warn-and-skip when required fields are missing — still
+   open, owner reconsidering.** The earlier call (`--rename-only
+   --add-metadata` hard-aborts the whole batch if `long_caption`/
+   `keywords` are missing from an "ok" group) may be disproportionate —
+   it blocks an otherwise-legitimate rename over a metadata-only problem.
+   The project's existing precedent for a comparable partial-failure case
+   (the MOV/MP4 pair-deletion edge case) is "warning + skip," not abort;
+   skipping metadata for the affected groups while letting the rename
+   proceed would preserve the "`--rename-only` never touches `mlx_vlm`"
+   invariant just as well as aborting does, without making renames newly
+   blockable by a metadata misconfiguration. Not decided either way yet.
+3. **`exiftool` preflight requirement — decided.** Add it to
+   `preflight.py`'s binary checks unconditionally, same flat/unconditional
+   shape as the existing checks, required for every invocation regardless
+   of whether metadata flags are used. Traded off deliberately: it's a new
+   hard requirement even for users who never touch `--add-metadata`/
+   `--metadata-backfill`, accepted because it's a one-line `brew install`
+   and keeps `preflight.py` simple rather than needing mode-awareness
+   threaded into it. (Full detail under "Writing mechanism" above.)
+4. **Config-file default for `--add-metadata` — not yet decided, not
+   urgent.** Config precedence is CLI flags > config file > defaults
+   (`config.py`). A persistent `add_metadata = true` in `config.toml`
+   would remove the per-invocation friction for a user who always wants
+   metadata, but reintroduces the "behavior changes without an explicit
+   flag on this invocation" risk that made the flag opt-in in the first
+   place, for anything that relies on config defaults rather than passing
+   flags explicitly. Flagged as a real question, not resolved.
 
 ## Where this runs in the pipeline
 
