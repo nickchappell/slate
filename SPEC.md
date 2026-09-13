@@ -240,9 +240,72 @@ is exactly what I want it called" signal, and it's already the existing
 mechanism's contract. A `short_caption` JSON edit only drives `new_stem`
 when the JPEG wasn't separately touched.
 
+## CLI flags
+
+Decided in this conversation:
+
+- **`--add-metadata`** — opt-in modifier for the main rename flow.
+  Combinable with `--dry-run`, `--rename-only`, and `--process-and-rename`.
+  **Off by default**, specifically so existing scripts that already call
+  `slate` keep today's rename-only behavior unchanged — metadata never
+  gets written just because this feature exists in the codebase.
+  - `--dry-run --add-metadata` — captioning uses the three-section
+    SHORT/LONG/KEYWORDS prompt instead of SHORT-only, and
+    `short_caption`/`long_caption`/`keywords` get populated in
+    `rename_mappings.json` for review. Still fully non-destructive, same
+    contract as plain `--dry-run`.
+  - `--rename-only --rename-mappings=... --add-metadata` — applies the
+    rename *and* writes the reviewed metadata via exiftool.
+    `--add-metadata` must be passed again here, explicitly — it is
+    **not** inferred from the mapping file already containing
+    `long_caption`/`keywords`, precisely so an existing automated
+    `--rename-only` invocation never starts writing metadata just because
+    a human (or later tooling) added those fields to the JSON.
+  - `--process-and-rename --add-metadata` — same three-section prompt and
+    embed, in the single combined invocation.
+  - **Constraint carried over from the existing design:** `--rename-only`
+    (Phase 2) deliberately never touches `mlx_vlm` (see CLAUDE.md's module
+    layout note: "`--rename-only` (Phase 2) never captions, so it never
+    touches `mlx_vlm`"). So `--rename-only --add-metadata` must **not**
+    fall back to invoking the VLM on the spot if `long_caption`/`keywords`
+    are missing from an "ok" group in the loaded mapping file (e.g.
+    because it was produced by a plain `--dry-run` without
+    `--add-metadata`). That has to be a hard error telling the user to
+    re-run `--dry-run --add-metadata` first — never a silent,
+    on-the-fly generation that would break the existing invariant.
+
+- **`--metadata-backfill`** — standalone mode for already-renamed files
+  (see "Backfill mode" below), entirely separate from the rename flow.
+  Reuses `--dry-run` rather than defining a metadata-specific dry-run flag:
+  - `--metadata-backfill --dry-run [--input-dir=... | --input-files=...]`
+    — generate step: writes `review/metadata_changes.json` + preview
+    JPEGs, no writes to the real files.
+  - `--metadata-backfill --metadata-mappings=review/metadata_changes.json`
+    (no `--dry-run`) — apply step: writes metadata via exiftool.
+
+**Mutual exclusivity:**
+- `--metadata-backfill` × (`--rename-only`, `--process-and-rename`,
+  `--add-metadata`) — hard error. Backfill mode never renames anything,
+  and its metadata writing isn't optional/toggleable the way
+  `--add-metadata` is, so combining the two is meaningless, not just
+  redundant. Only rename files, or only backfill metadata — never both in
+  one invocation.
+- `--dry-run` is shared/reused by both axes — it means "generate step, no
+  writes" either way, disambiguated entirely by whether
+  `--metadata-backfill` is also present.
+
+**Implementation note:** this isn't a simple pairwise conflict
+`argparse`'s `add_mutually_exclusive_group()` handles cleanly on its own
+(`--dry-run` needs to combine freely with either axis, while
+`--metadata-backfill` conflicts with three specific other flags) — likely
+needs manual post-parse validation in `cli.py` (`parser.error(...)`)
+alongside whatever argparse grouping covers the simpler pairs.
+
 ## Where this runs in the pipeline
 
-- **Phase 2** (`--rename-only`) is where this all belongs: `review_sync.py`
+- Everything below is what `--add-metadata` turns on — none of it runs
+  without that flag. **Phase 2** (`--rename-only`) is where this all
+  belongs: `review_sync.py`
   gets extended to reconcile `short_caption` under the precedence rule
   above (it already runs at the start of Phase 2 today), and the actual
   exiftool embed call slots into `rename.py`'s existing per-file
@@ -320,19 +383,20 @@ KEYWORDS: <6-10 comma-separated single words or short phrases...>
   (which paired file was used as the captioning source).
 - `status`/`error` — same "ok"/"error" pattern as `MappingEntry`.
 
-**Two-step flow, mirroring Phase 1 → Phase 2's shape:**
-1. **Generate** (proposed flags: `--embed-metadata-dry-run
-   --input-dir=...`, reusing the existing input-selection flags) — scans
-   the given files/dir, re-runs pairing + extraction + the 2-section VLM
-   prompt, writes `review/metadata_changes.json` + preview JPEGs. No
-   writes to the real files. Incremental/re-runnable the same way Phase 1
-   is: groups already present (matched by `current_files`) get skipped and
-   carried over, regardless of prior `status`.
-2. **Apply** (proposed flags: `--embed-metadata
-   --metadata-mappings=review/metadata_changes.json`) — re-checks every
-   file still exists, re-derives `title` live from each file's actual
-   current name (not from the JSON), confirms, then writes Title/
-   Description/Keywords + the `com.slate.*` provenance fields via
+**Two-step flow, mirroring Phase 1 → Phase 2's shape, using the flags
+decided above:**
+1. **Generate** (`--metadata-backfill --dry-run --input-dir=...`, reusing
+   the existing input-selection flags) — scans the given files/dir,
+   re-runs pairing + extraction + the 2-section VLM prompt, writes
+   `review/metadata_changes.json` + preview JPEGs. No writes to the real
+   files. Incremental/re-runnable the same way Phase 1 is: groups already
+   present (matched by `current_files`) get skipped and carried over,
+   regardless of prior `status`.
+2. **Apply** (`--metadata-backfill
+   --metadata-mappings=review/metadata_changes.json`, no `--dry-run`) —
+   re-checks every file still exists, re-derives `title` live from each
+   file's actual current name (not from the JSON), confirms, then writes
+   Title/Description/Keywords + the `com.slate.*` provenance fields via
    exiftool. On success, archives the mapping file in place to
    `applied_metadata_changes_<timestamp>.json`, matching the
    `applied_renames_<timestamp>.json` audit-trail convention.
@@ -352,9 +416,6 @@ exiftool mechanics, just reached via a different entry point.
 
 - Module structure: new `metadata.py` (parallel to `rename.py`,
   `review_sync.py`) vs. folding exiftool calls directly into `rename.py`.
-- Opt-in flag vs. on-by-default once `exiftool` is confirmed present —
-  needs a decision consistent with how other optional behaviors are gated
-  elsewhere in `cli.py`.
 - Error-handling policy for exiftool failures mid-batch: skip-and-warn
   (matches the MOV/MP4 pair-deletion "warning + skip" precedent at Phase
   2's pre-flight) vs. hard-abort.
@@ -371,9 +432,6 @@ exiftool mechanics, just reached via a different entry point.
   probably after "Filename Assembly" and before "Workflow Modes," since
   Phase 2's description will need to reference it) and README's "Technical
   Decisions and Opinions," then delete this file.
-- Backfill mode flag names (`--embed-metadata-dry-run`/`--embed-metadata
-  --metadata-mappings=...` above are placeholders) — finalize once the
-  main-flow flags are settled, for naming consistency.
 - Backfill mode's `-overwrite_original` vs. keeping `_original` backups:
   same open tradeoff as the main flow, not yet decided either place.
 - Whether the `com.slate.*`-tag idempotency check (backfill mode) needs an
