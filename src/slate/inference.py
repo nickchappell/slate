@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import string
+from dataclasses import dataclass
 from functools import lru_cache
 
 # mlx_vlm (and its transformers/mlx.core dependency tree) costs ~0.9s to
@@ -16,6 +18,15 @@ from functools import lru_cache
 # generation-time token cap is the actual backstop, independent of prompt
 # wording. Not currently a config option.
 MAX_CAPTION_TOKENS = 25
+
+# Budget for the --add-metadata/--metadata-backfill SHORT/LONG/KEYWORDS (or
+# LONG/KEYWORDS) prompt -- see "Caption generation" in
+# spec/metadata-embedding.md. 140 is a reasoned estimate (SHORT ~10 tokens +
+# LONG ~40 + KEYWORDS ~40 + label/formatting overhead), not a measured
+# value -- needs empirical tuning once real footage/model access is
+# available; tune against tests/fixtures/footage/ before treating this as
+# final.
+MAX_CAPTION_TOKENS_WITH_METADATA = 140
 
 # Mirrors mlx_vlm.utils.get_model_path's default allow_patterns. Kept in
 # sync by hand since mlx_vlm doesn't export this list as a public constant --
@@ -139,6 +150,7 @@ def generate_caption(
     model_repo: str,
     *,
     check_for_updates: bool = False,
+    max_tokens: int = MAX_CAPTION_TOKENS,
 ) -> str:
     _ensure_mlx_deps()
 
@@ -151,8 +163,148 @@ def generate_caption(
         processor,
         formatted_prompt,
         image=image_paths,
-        max_tokens=MAX_CAPTION_TOKENS,
+        max_tokens=max_tokens,
         temperature=0.0,
         verbose=False,
     )
     return result.text
+
+
+@dataclass
+class CaptionSections:
+    short: str | None
+    long: str | None
+    keywords: list[str] | None
+
+
+# Small, hardcoded, dependency-free -- see "Explicitly rejected approach" in
+# spec/metadata-embedding.md: real NLP (spaCy/nltk) was rejected as a heavy
+# dependency that cuts against inference.py's lazy-import discipline. This
+# is a fallback safety net only, not the primary KEYWORDS mechanism.
+_STOPWORDS = {
+    "a",
+    "an",
+    "the",
+    "and",
+    "or",
+    "of",
+    "in",
+    "on",
+    "at",
+    "with",
+    "this",
+    "that",
+    "these",
+    "those",
+    "is",
+    "are",
+    "was",
+    "were",
+    "to",
+    "for",
+    "as",
+    "it",
+    "its",
+    "from",
+    "by",
+    "over",
+    "near",
+    "across",
+    "through",
+    "into",
+    "up",
+    "down",
+    "out",
+    "off",
+    "above",
+    "below",
+    "between",
+}
+
+_SECTION_MARKERS = ("SHORT:", "LONG:", "KEYWORDS:")
+
+
+def _split_sections(raw_text: str) -> dict[str, str]:
+    """Splits raw_text on SHORT:/LONG:/KEYWORDS: markers, wherever present,
+    regardless of order. Returns {marker_name_lowercase: section_text}."""
+    # Find each marker's position, then slice from one marker to the next.
+    positions: list[tuple[int, str]] = []
+    for marker in _SECTION_MARKERS:
+        idx = raw_text.find(marker)
+        if idx != -1:
+            positions.append((idx, marker))
+    positions.sort()
+
+    sections: dict[str, str] = {}
+    for i, (start, marker) in enumerate(positions):
+        end = positions[i + 1][0] if i + 1 < len(positions) else len(raw_text)
+        text = raw_text[start + len(marker) : end].strip()
+        sections[marker[:-1].lower()] = text
+    return sections
+
+
+def _looks_like_keyword_list(text: str) -> bool:
+    # A malformed KEYWORDS section (e.g. a full sentence) is the most likely
+    # of the three to break format on a quantized model -- see spec's
+    # "Parsing & fallback." Heuristic: short, comma-separated, no
+    # sentence-ending punctuation.
+    if not text or "," not in text:
+        return False
+    return not any(text.rstrip().endswith(p) for p in (".", "!", "?"))
+
+
+def _clean_keyword(raw: str) -> str:
+    # The model sometimes wraps each keyword in its own quote marks (e.g.
+    # `KEYWORDS: "train", "urban setting"`) even though the prompt asks for
+    # a bare comma list -- strip a single matching pair of surrounding
+    # quotes per keyword, same idea as normalize_caption()'s whole-string
+    # quote strip, then re-trim in case there was whitespace inside them.
+    text = raw.strip()
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in "\"'":
+        text = text[1:-1].strip()
+    return text
+
+
+def _derive_keywords_from_long(long_caption: str, max_keywords: int = 10) -> list[str]:
+    """Fallback derivation when KEYWORDS is missing/malformed: tokenize,
+    lowercase, strip punctuation, drop stopwords, dedupe (preserving order),
+    cap at max_keywords. Not true noun-phrase extraction -- deliberately a
+    cheap safety net, not the primary mechanism (see spec)."""
+    words = (
+        long_caption.lower()
+        .translate(str.maketrans("", "", string.punctuation))
+        .split()
+    )
+    keywords: list[str] = []
+    seen: set[str] = set()
+    for word in words:
+        if word in _STOPWORDS or word in seen:
+            continue
+        seen.add(word)
+        keywords.append(word)
+        if len(keywords) >= max_keywords:
+            break
+    return keywords
+
+
+def parse_caption_sections(raw_text: str) -> CaptionSections:
+    """Parses a SHORT:/LONG:/KEYWORDS: (or LONG:/KEYWORDS: only, for the
+    backfill prompt) response. Any section may be absent. A malformed or
+    missing KEYWORDS section falls back to _derive_keywords_from_long()
+    against whatever LONG text was parsed."""
+    sections = _split_sections(raw_text)
+
+    short = sections.get("short") or None
+    long_text = sections.get("long") or None
+
+    keywords: list[str] | None
+    raw_keywords = sections.get("keywords")
+    if raw_keywords and _looks_like_keyword_list(raw_keywords):
+        keywords = [_clean_keyword(kw) for kw in raw_keywords.split(",") if kw.strip()]
+        keywords = [kw for kw in keywords if kw]
+    elif long_text:
+        keywords = _derive_keywords_from_long(long_text)
+    else:
+        keywords = None
+
+    return CaptionSections(short=short, long=long_text, keywords=keywords)

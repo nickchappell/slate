@@ -4,16 +4,20 @@ from pathlib import Path
 import pytest
 
 import slate.config as config_module
+import slate.rename as rename_module
 from slate import cli
 from slate.cli import (
     UsageError,
     _check_mapping_version_or_exit,
     _effective_settings,
+    _mode_description,
     _resolve_input_files,
+    _validate_mode_flags,
     build_parser,
 )
 from slate.config import CONFIG_ENV_VAR
 from slate.mappings import APP_VERSION, MappingEntry, load_mappings, save_mappings
+from slate.metadata import EmbedOutcome
 from slate.review_sync import hash_file
 
 
@@ -23,10 +27,15 @@ def touch(path):
 
 
 class TestBuildParser:
-    def test_requires_exactly_one_mode(self):
+    def test_zero_mode_flags_parses_fine_at_argparse_level(self):
+        # The "at least one mode" invariant moved to _validate_mode_flags()
+        # since --metadata-backfill can't live in mode_group's
+        # required=True mutual-exclusion (it must combine freely with
+        # --dry-run) -- see TestValidateModeFlags below.
         parser = build_parser()
-        with pytest.raises(SystemExit):
-            parser.parse_args([])
+        args = parser.parse_args([])
+        assert args.dry_run is False
+        assert args.metadata_backfill is False
 
     def test_modes_are_mutually_exclusive(self):
         parser = build_parser()
@@ -71,6 +80,174 @@ class TestBuildParser:
         args = parser.parse_args(["--dry-run", "--input-dir", "footage"])
         assert args.dry_run is True
         assert str(args.input_dir) == "footage"
+
+    def test_add_metadata_flag(self):
+        parser = build_parser()
+        args = parser.parse_args(["--dry-run", "--input-dir", "x", "--add-metadata"])
+        assert args.add_metadata is True
+
+    def test_verbose_flag_long_and_short_form(self):
+        parser = build_parser()
+        assert parser.parse_args(["--dry-run", "--input-dir", "x"]).verbose is False
+        assert (
+            parser.parse_args(["--dry-run", "--input-dir", "x", "--verbose"]).verbose
+            is True
+        )
+        assert (
+            parser.parse_args(["--dry-run", "--input-dir", "x", "-v"]).verbose is True
+        )
+
+    def test_metadata_backfill_combines_with_dry_run(self):
+        # Deliberately NOT in mode_group -- must parse alongside --dry-run.
+        parser = build_parser()
+        args = parser.parse_args(
+            ["--metadata-backfill", "--dry-run", "--input-dir", "x"]
+        )
+        assert args.metadata_backfill is True
+        assert args.dry_run is True
+
+    def test_metadata_mappings_flag(self):
+        parser = build_parser()
+        args = parser.parse_args(
+            ["--metadata-backfill", "--metadata-mappings", "review/x.json"]
+        )
+        assert str(args.metadata_mappings) == "review/x.json"
+
+
+class TestValidateModeFlags:
+    def _args(self, parser, argv):
+        return parser.parse_args(argv)
+
+    def test_zero_mode_flags_is_an_error(self):
+        parser = build_parser()
+        args = self._args(parser, [])
+        with pytest.raises(SystemExit):
+            _validate_mode_flags(args, parser)
+
+    def test_plain_dry_run_is_valid(self):
+        parser = build_parser()
+        args = self._args(parser, ["--dry-run", "--input-dir", "x"])
+        _validate_mode_flags(args, parser)  # does not raise
+
+    def test_metadata_backfill_with_dry_run_is_valid(self):
+        parser = build_parser()
+        args = self._args(
+            parser, ["--metadata-backfill", "--dry-run", "--input-dir", "x"]
+        )
+        _validate_mode_flags(args, parser)  # does not raise
+
+    def test_metadata_backfill_alone_is_valid_apply_step(self):
+        parser = build_parser()
+        args = self._args(
+            parser, ["--metadata-backfill", "--metadata-mappings", "x.json"]
+        )
+        _validate_mode_flags(args, parser)  # does not raise
+
+    def test_metadata_backfill_with_rename_only_is_an_error(self):
+        parser = build_parser()
+        args = self._args(
+            parser, ["--metadata-backfill", "--rename-only", "--rename-mappings", "x"]
+        )
+        with pytest.raises(SystemExit):
+            _validate_mode_flags(args, parser)
+
+    def test_metadata_backfill_with_process_and_rename_is_an_error(self):
+        parser = build_parser()
+        args = self._args(
+            parser, ["--metadata-backfill", "--process-and-rename", "--input-dir", "x"]
+        )
+        with pytest.raises(SystemExit):
+            _validate_mode_flags(args, parser)
+
+    def test_metadata_backfill_with_add_metadata_is_an_error(self):
+        parser = build_parser()
+        args = self._args(
+            parser,
+            ["--metadata-backfill", "--dry-run", "--add-metadata", "--input-dir", "x"],
+        )
+        with pytest.raises(SystemExit):
+            _validate_mode_flags(args, parser)
+
+    def test_metadata_backfill_with_model_update_check_is_an_error(self):
+        parser = build_parser()
+        args = self._args(parser, ["--metadata-backfill", "--model-update-check"])
+        with pytest.raises(SystemExit):
+            _validate_mode_flags(args, parser)
+
+    def test_metadata_backfill_apply_step_with_input_dir_is_an_error(self):
+        parser = build_parser()
+        args = self._args(
+            parser,
+            ["--metadata-backfill", "--metadata-mappings", "x", "--input-dir", "y"],
+        )
+        with pytest.raises(SystemExit):
+            _validate_mode_flags(args, parser)
+
+    def test_metadata_backfill_generate_step_with_input_dir_is_valid(self):
+        parser = build_parser()
+        args = self._args(
+            parser, ["--metadata-backfill", "--dry-run", "--input-dir", "x"]
+        )
+        _validate_mode_flags(args, parser)  # does not raise
+
+
+class TestModeDescription:
+    def _args(self, argv):
+        return build_parser().parse_args(argv)
+
+    def test_dry_run_has_one_bullet_without_add_metadata(self):
+        args = self._args(["--dry-run", "--input-dir", "x"])
+        name, bullets = _mode_description(args, add_metadata=False)
+        assert name == "Dry-run mode"
+        assert len(bullets) == 1
+
+    def test_dry_run_gains_metadata_bullet(self):
+        args = self._args(["--dry-run", "--input-dir", "x"])
+        name, bullets = _mode_description(args, add_metadata=True)
+        assert name == "Dry-run mode"
+        assert len(bullets) == 2
+        assert "QuickTime/XMP" in bullets[1]
+        assert "--rename-only" in bullets[1]
+
+    def test_rename_only_gains_metadata_bullet(self):
+        args = self._args(["--rename-only", "--rename-mappings", "x"])
+        name, bullets = _mode_description(args, add_metadata=True)
+        assert name == "Rename mode"
+        assert len(bullets) == 2
+        assert "embedded" in bullets[1]
+
+    def test_process_and_rename_gains_metadata_bullet(self):
+        args = self._args(["--process-and-rename", "--input-dir", "x"])
+        name, bullets = _mode_description(args, add_metadata=True)
+        assert name == "Process-and-rename mode"
+        assert len(bullets) == 2
+
+    def test_process_and_rename_without_add_metadata_has_one_bullet(self):
+        args = self._args(["--process-and-rename", "--input-dir", "x"])
+        name, bullets = _mode_description(args, add_metadata=False)
+        assert name == "Process-and-rename mode"
+        assert len(bullets) == 1
+
+    def test_metadata_backfill_generate_never_gains_a_second_bullet(self):
+        # add_metadata=True is meaningless here (--add-metadata is
+        # mutually exclusive with --metadata-backfill), but the function
+        # must not append a second bullet regardless.
+        args = self._args(["--metadata-backfill", "--dry-run", "--input-dir", "x"])
+        name, bullets = _mode_description(args, add_metadata=True)
+        assert name == "Metadata backfill mode (generate)"
+        assert len(bullets) == 1
+
+    def test_metadata_backfill_apply_has_one_bullet(self):
+        args = self._args(["--metadata-backfill", "--metadata-mappings", "x.json"])
+        name, bullets = _mode_description(args, add_metadata=False)
+        assert name == "Metadata backfill mode (apply)"
+        assert len(bullets) == 1
+
+    def test_model_update_check_has_one_bullet(self):
+        args = self._args(["--model-update-check"])
+        name, bullets = _mode_description(args, add_metadata=False)
+        assert name == "Model-update-check mode"
+        assert len(bullets) == 1
 
 
 class TestResolveInputFiles:
@@ -126,6 +303,7 @@ class TestEffectiveSettings:
             suffix=None,
             num_frames_for_caption=None,
             skip_generate_undo_script=False,
+            add_metadata=False,
         )
         base.update(overrides)
         return argparse.Namespace(**base)
@@ -147,6 +325,7 @@ class TestEffectiveSettings:
             suffix,
             num_frames_for_caption,
             generate_undo,
+            add_metadata,
         ) = _effective_settings(args)
         assert model == config.model
         assert prepend is False
@@ -154,6 +333,7 @@ class TestEffectiveSettings:
         assert suffix == ""
         assert num_frames_for_caption == config.num_frames_for_caption
         assert generate_undo is True
+        assert add_metadata is False
 
     def test_cli_model_overrides_config(self, tmp_path, monkeypatch):
         config_file = tmp_path / "config.toml"
@@ -176,9 +356,16 @@ class TestEffectiveSettings:
         config_file.write_text("[defaults]\nnum_frames_for_caption = 5\n")
         monkeypatch.setenv(CONFIG_ENV_VAR, str(config_file))
         args = self._base_args(num_frames_for_caption=1)
-        _config, _model, _prepend, _prefix, _suffix, num_frames, _undo = (
-            _effective_settings(args)
-        )
+        (
+            _config,
+            _model,
+            _prepend,
+            _prefix,
+            _suffix,
+            num_frames,
+            _undo,
+            _add_metadata,
+        ) = _effective_settings(args)
         assert num_frames == 1
 
     def test_config_num_frames_for_caption_used_when_no_cli_override(
@@ -188,9 +375,16 @@ class TestEffectiveSettings:
         config_file.write_text("[defaults]\nnum_frames_for_caption = 5\n")
         monkeypatch.setenv(CONFIG_ENV_VAR, str(config_file))
         args = self._base_args()
-        _config, _model, _prepend, _prefix, _suffix, num_frames, _undo = (
-            _effective_settings(args)
-        )
+        (
+            _config,
+            _model,
+            _prepend,
+            _prefix,
+            _suffix,
+            num_frames,
+            _undo,
+            _add_metadata,
+        ) = _effective_settings(args)
         assert num_frames == 5
 
     def test_cli_prepend_flag_overrides_config(self, tmp_path, monkeypatch):
@@ -232,7 +426,7 @@ class TestEffectiveSettings:
         config_file.write_text("[defaults]\ngenerate_undo_script = true\n")
         monkeypatch.setenv(CONFIG_ENV_VAR, str(config_file))
         args = self._base_args(skip_generate_undo_script=True)
-        *_rest, generate_undo = _effective_settings(args)
+        *_rest, generate_undo, _add_metadata = _effective_settings(args)
         assert generate_undo is False
 
     def test_config_generate_undo_script_false_respected_without_cli_flag(
@@ -242,8 +436,35 @@ class TestEffectiveSettings:
         config_file.write_text("[defaults]\ngenerate_undo_script = false\n")
         monkeypatch.setenv(CONFIG_ENV_VAR, str(config_file))
         args = self._base_args()
-        *_rest, generate_undo = _effective_settings(args)
+        *_rest, generate_undo, _add_metadata = _effective_settings(args)
         assert generate_undo is False
+
+    def test_cli_add_metadata_flag_overrides_config(self, tmp_path, monkeypatch):
+        config_file = tmp_path / "config.toml"
+        config_file.write_text("[defaults]\nadd_metadata = false\n")
+        monkeypatch.setenv(CONFIG_ENV_VAR, str(config_file))
+        args = self._base_args(add_metadata=True)
+        *_rest, add_metadata = _effective_settings(args)
+        assert add_metadata is True
+
+    def test_config_add_metadata_true_respected_without_cli_flag(
+        self, tmp_path, monkeypatch
+    ):
+        config_file = tmp_path / "config.toml"
+        config_file.write_text("[defaults]\nadd_metadata = true\n")
+        monkeypatch.setenv(CONFIG_ENV_VAR, str(config_file))
+        args = self._base_args()
+        *_rest, add_metadata = _effective_settings(args)
+        assert add_metadata is True
+
+    def test_add_metadata_defaults_to_false(self, tmp_path, monkeypatch):
+        monkeypatch.delenv(CONFIG_ENV_VAR, raising=False)
+        monkeypatch.setattr(
+            config_module, "DEFAULT_CONFIG_PATH", tmp_path / "config.toml"
+        )
+        args = self._base_args()
+        *_rest, add_metadata = _effective_settings(args)
+        assert add_metadata is False
 
 
 class TestCheckMappingVersionOrExit:
@@ -482,6 +703,269 @@ class TestRunPhase2ReviewSync:
         assert (tmp_path / "existing target.MOV").is_file()
 
 
+class TestRunPhase2AddMetadata:
+    def test_footgun_warning_when_metadata_present_but_add_metadata_false(
+        self, tmp_path, capsys
+    ):
+        touch(tmp_path / "a.MOV")
+        review_dir = tmp_path / "review"
+        review_dir.mkdir()
+        mappings_path = review_dir / "rename_mappings.json"
+        mappings_path.write_text("[]")
+        entries = [
+            MappingEntry(
+                status="ok",
+                original_files=["a.MOV"],
+                new_stem="a caption",
+                long_caption="A caption.",
+                keywords=["a"],
+            )
+        ]
+
+        cli.run_phase2(
+            entries,
+            tmp_path,
+            mappings_path,
+            generate_undo_script=False,
+            assume_yes=True,
+        )
+
+        out = capsys.readouterr().out
+        assert "--add-metadata was not passed" in out
+        assert (tmp_path / "a caption.MOV").is_file()
+
+    def test_no_footgun_warning_when_no_metadata_fields_present(self, tmp_path, capsys):
+        touch(tmp_path / "a.MOV")
+        review_dir = tmp_path / "review"
+        review_dir.mkdir()
+        mappings_path = review_dir / "rename_mappings.json"
+        mappings_path.write_text("[]")
+        entries = [
+            MappingEntry(status="ok", original_files=["a.MOV"], new_stem="a caption")
+        ]
+
+        cli.run_phase2(
+            entries,
+            tmp_path,
+            mappings_path,
+            generate_undo_script=False,
+            assume_yes=True,
+        )
+
+        out = capsys.readouterr().out
+        assert "--add-metadata was not passed" not in out
+
+    def test_missing_fields_warns_and_skips_but_still_renames(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        def boom(*a, **k):
+            raise AssertionError("embed_metadata should not have been called")
+
+        monkeypatch.setattr(rename_module, "embed_metadata", boom)
+        touch(tmp_path / "a.MOV")
+        review_dir = tmp_path / "review"
+        review_dir.mkdir()
+        mappings_path = review_dir / "rename_mappings.json"
+        mappings_path.write_text("[]")
+        entries = [
+            MappingEntry(status="ok", original_files=["a.MOV"], new_stem="a caption")
+        ]
+
+        cli.run_phase2(
+            entries,
+            tmp_path,
+            mappings_path,
+            generate_undo_script=False,
+            assume_yes=True,
+            add_metadata=True,
+        )
+
+        out = capsys.readouterr().out
+        assert "skipping metadata" in out
+        assert "long_caption/keywords missing" in out
+        assert (tmp_path / "a caption.MOV").is_file()
+
+    def test_successful_embed_prints_line_and_updates_summary(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        outcome = EmbedOutcome(embedded=True, preserved_fields=[])
+        monkeypatch.setattr(rename_module, "embed_metadata", lambda *a, **k: outcome)
+        touch(tmp_path / "a.MOV")
+        review_dir = tmp_path / "review"
+        review_dir.mkdir()
+        mappings_path = review_dir / "rename_mappings.json"
+        mappings_path.write_text("[]")
+        entries = [
+            MappingEntry(
+                status="ok",
+                original_files=["a.MOV"],
+                new_stem="a caption",
+                long_caption="A caption.",
+                keywords=["a"],
+                captioned_at="2026-09-14T18:32:07Z",
+            )
+        ]
+
+        cli.run_phase2(
+            entries,
+            tmp_path,
+            mappings_path,
+            generate_undo_script=False,
+            assume_yes=True,
+            add_metadata=True,
+        )
+
+        out = capsys.readouterr().out
+        assert "Metadata embedded (Title, Description, Keywords)" in out
+        assert (
+            "Metadata: 1 embedded, 0 preserved pre-existing field(s), 0 failed" in out
+        )
+
+    def test_preserved_field_prints_a_line_per_field(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        outcome = EmbedOutcome(embedded=True, preserved_fields=["Title", "Description"])
+        monkeypatch.setattr(rename_module, "embed_metadata", lambda *a, **k: outcome)
+        touch(tmp_path / "a.MOV")
+        review_dir = tmp_path / "review"
+        review_dir.mkdir()
+        mappings_path = review_dir / "rename_mappings.json"
+        mappings_path.write_text("[]")
+        entries = [
+            MappingEntry(
+                status="ok",
+                original_files=["a.MOV"],
+                new_stem="a caption",
+                long_caption="A caption.",
+                keywords=["a"],
+                captioned_at="2026-09-14T18:32:07Z",
+            )
+        ]
+
+        cli.run_phase2(
+            entries,
+            tmp_path,
+            mappings_path,
+            generate_undo_script=False,
+            assume_yes=True,
+            add_metadata=True,
+        )
+
+        out = capsys.readouterr().out
+        assert "Pre-existing Title preserved as com.slate.original-title" in out
+        assert (
+            "Pre-existing Description preserved as com.slate.original-description"
+            in out
+        )
+        assert (
+            "Metadata: 1 embedded, 1 preserved pre-existing field(s), 0 failed" in out
+        )
+
+    def test_exiftool_failure_warns_and_skips_but_file_stays_renamed(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        outcome = EmbedOutcome(embedded=False, error="exiftool exited 1")
+        monkeypatch.setattr(rename_module, "embed_metadata", lambda *a, **k: outcome)
+        touch(tmp_path / "a.MOV")
+        review_dir = tmp_path / "review"
+        review_dir.mkdir()
+        mappings_path = review_dir / "rename_mappings.json"
+        mappings_path.write_text("[]")
+        entries = [
+            MappingEntry(
+                status="ok",
+                original_files=["a.MOV"],
+                new_stem="a caption",
+                long_caption="A caption.",
+                keywords=["a"],
+                captioned_at="2026-09-14T18:32:07Z",
+            )
+        ]
+
+        cli.run_phase2(
+            entries,
+            tmp_path,
+            mappings_path,
+            generate_undo_script=False,
+            assume_yes=True,
+            add_metadata=True,
+        )
+
+        out = capsys.readouterr().out
+        assert "metadata embedding failed" in out
+        assert "exiftool exited 1" in out
+        assert (tmp_path / "a caption.MOV").is_file()
+        assert (
+            "Metadata: 0 embedded, 0 preserved pre-existing field(s), 1 failed" in out
+        )
+
+    def test_add_metadata_false_never_calls_embed_metadata(self, tmp_path, monkeypatch):
+        def boom(*a, **k):
+            raise AssertionError("embed_metadata should not have been called")
+
+        monkeypatch.setattr(rename_module, "embed_metadata", boom)
+        touch(tmp_path / "a.MOV")
+        review_dir = tmp_path / "review"
+        review_dir.mkdir()
+        mappings_path = review_dir / "rename_mappings.json"
+        mappings_path.write_text("[]")
+        entries = [
+            MappingEntry(
+                status="ok",
+                original_files=["a.MOV"],
+                new_stem="a caption",
+                long_caption="A caption.",
+                keywords=["a"],
+            )
+        ]
+
+        cli.run_phase2(
+            entries,
+            tmp_path,
+            mappings_path,
+            generate_undo_script=False,
+            assume_yes=True,
+        )
+
+        assert (tmp_path / "a caption.MOV").is_file()
+
+    def test_confirmation_prompt_mentions_metadata_when_add_metadata(
+        self, tmp_path, monkeypatch
+    ):
+        touch(tmp_path / "a.MOV")
+        review_dir = tmp_path / "review"
+        review_dir.mkdir()
+        mappings_path = review_dir / "rename_mappings.json"
+        mappings_path.write_text("[]")
+        entries = [
+            MappingEntry(
+                status="ok",
+                original_files=["a.MOV"],
+                new_stem="a caption",
+                long_caption="A caption.",
+                keywords=["a"],
+            )
+        ]
+        seen = {}
+
+        def spy_ask(message, **kwargs):
+            seen["message"] = message
+            return False
+
+        monkeypatch.setattr(cli.Confirm, "ask", spy_ask)
+
+        cli.run_phase2(
+            entries,
+            tmp_path,
+            mappings_path,
+            generate_undo_script=False,
+            assume_yes=False,
+            add_metadata=True,
+        )
+
+        assert "embed Title/Description/Keywords" in seen["message"]
+
+
 class TestRunPhase1PreviewHash:
     """Locks in the invariant review_sync depends on: run_phase1 records
     preview_jpeg_sha256 as the actual content hash of the preview JPEG it
@@ -591,3 +1075,465 @@ class TestRunPhase1PreviewHash:
         assert preview_a_b.read_bytes() == b"frame-for-a b"
         assert entry_a.preview_jpeg_sha256 == hash_file(preview_a)
         assert entry_a_b.preview_jpeg_sha256 == hash_file(preview_a_b)
+
+
+class TestRunPhase1AddMetadata:
+    def _stub_pipeline(self, monkeypatch, caption_text):
+        monkeypatch.setattr(cli, "validate_media_files", lambda files: (files, []))
+
+        def fake_extract_frames(source, output_dir, num_frames):
+            frame = output_dir / "frame_0.jpg"
+            frame.write_bytes(b"fake-frame-bytes")
+            return [frame]
+
+        monkeypatch.setattr(cli, "extract_frames", fake_extract_frames)
+        monkeypatch.setattr(cli, "generate_caption", lambda *a, **k: caption_text)
+        monkeypatch.setattr(
+            cli,
+            "build_montage",
+            lambda frame_paths, output_jpeg: output_jpeg.write_bytes(b"fake-montage"),
+        )
+
+    def test_three_section_prompt_and_token_budget_used(self, tmp_path, monkeypatch):
+        source = touch(tmp_path / "a.MOV")
+        self._stub_pipeline(
+            monkeypatch,
+            "SHORT: red kayak\nLONG: A red kayak drifts across a lake.\n"
+            "KEYWORDS: kayak, lake, red",
+        )
+        calls = {}
+
+        def fake_generate_caption(image_paths, prompt, model, **kwargs):
+            calls["prompt"] = prompt
+            calls["kwargs"] = kwargs
+            return (
+                "SHORT: red kayak\nLONG: A red kayak drifts across a lake.\n"
+                "KEYWORDS: kayak, lake, red"
+            )
+
+        monkeypatch.setattr(cli, "generate_caption", fake_generate_caption)
+
+        review_dir = tmp_path / "review"
+        mappings_path = review_dir / "rename_mappings.json"
+        cli.run_phase1(
+            [source],
+            tmp_path,
+            mappings_path,
+            review_dir,
+            model="fake-model",
+            prompt="fake-plain-prompt",
+            prepend=False,
+            prefix="",
+            suffix="",
+            max_file_name_length=255,
+            num_frames_for_caption=3,
+            add_metadata=True,
+        )
+
+        assert calls["prompt"] == cli.METADATA_PROMPT
+        assert calls["kwargs"]["max_tokens"] == cli.MAX_CAPTION_TOKENS_WITH_METADATA
+
+    def test_entry_fields_populated_from_parsed_sections(self, tmp_path, monkeypatch):
+        source = touch(tmp_path / "a.MOV")
+        self._stub_pipeline(
+            monkeypatch,
+            "SHORT: red kayak\nLONG: A red kayak drifts across a lake.\n"
+            "KEYWORDS: kayak, lake, red",
+        )
+
+        review_dir = tmp_path / "review"
+        mappings_path = review_dir / "rename_mappings.json"
+        _all, new_entries, _skipped = cli.run_phase1(
+            [source],
+            tmp_path,
+            mappings_path,
+            review_dir,
+            model="fake-model",
+            prompt="fake-plain-prompt",
+            prepend=False,
+            prefix="",
+            suffix="",
+            max_file_name_length=255,
+            num_frames_for_caption=3,
+            add_metadata=True,
+        )
+
+        entry = new_entries[0]
+        assert entry.new_stem == "a red kayak"
+        assert entry.short_caption == "red kayak"
+        assert entry.long_caption == "A red kayak drifts across a lake."
+        assert entry.keywords == ["kayak", "lake", "red"]
+        assert entry.captioned_at is not None
+
+    def test_add_metadata_false_leaves_metadata_fields_none(
+        self, tmp_path, monkeypatch
+    ):
+        source = touch(tmp_path / "a.MOV")
+        self._stub_pipeline(monkeypatch, "a plain caption")
+
+        review_dir = tmp_path / "review"
+        mappings_path = review_dir / "rename_mappings.json"
+        _all, new_entries, _skipped = cli.run_phase1(
+            [source],
+            tmp_path,
+            mappings_path,
+            review_dir,
+            model="fake-model",
+            prompt="fake-plain-prompt",
+            prepend=False,
+            prefix="",
+            suffix="",
+            max_file_name_length=255,
+            num_frames_for_caption=3,
+        )
+
+        entry = new_entries[0]
+        assert entry.short_caption is None
+        assert entry.long_caption is None
+        assert entry.keywords is None
+        assert entry.captioned_at is None
+
+    def test_summary_omits_metadata_line(self, tmp_path, monkeypatch, capsys):
+        source = touch(tmp_path / "a.MOV")
+        self._stub_pipeline(
+            monkeypatch,
+            "SHORT: red kayak\nLONG: A red kayak drifts across a lake.\n"
+            "KEYWORDS: kayak, lake, red",
+        )
+
+        review_dir = tmp_path / "review"
+        mappings_path = review_dir / "rename_mappings.json"
+        cli.run_phase1(
+            [source],
+            tmp_path,
+            mappings_path,
+            review_dir,
+            model="fake-model",
+            prompt="fake-plain-prompt",
+            prepend=False,
+            prefix="",
+            suffix="",
+            max_file_name_length=255,
+            num_frames_for_caption=3,
+            add_metadata=True,
+        )
+        out = capsys.readouterr().out
+        assert "Description + Keywords generated for" not in out
+
+    def test_custom_prompt_ignored_note_printed_when_prompt_customized(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        source = touch(tmp_path / "a.MOV")
+        self._stub_pipeline(
+            monkeypatch,
+            "SHORT: red kayak\nLONG: A red kayak drifts across a lake.\n"
+            "KEYWORDS: kayak, lake, red",
+        )
+
+        review_dir = tmp_path / "review"
+        mappings_path = review_dir / "rename_mappings.json"
+        cli.run_phase1(
+            [source],
+            tmp_path,
+            mappings_path,
+            review_dir,
+            model="fake-model",
+            prompt="a customized prompt, not the default",
+            prepend=False,
+            prefix="",
+            suffix="",
+            max_file_name_length=255,
+            num_frames_for_caption=3,
+            add_metadata=True,
+        )
+        out = capsys.readouterr().out
+        assert "configured prompt is not used with --add-metadata" in out
+
+    def test_custom_prompt_note_not_printed_for_default_prompt(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        source = touch(tmp_path / "a.MOV")
+        self._stub_pipeline(
+            monkeypatch,
+            "SHORT: red kayak\nLONG: A red kayak drifts across a lake.\n"
+            "KEYWORDS: kayak, lake, red",
+        )
+
+        review_dir = tmp_path / "review"
+        mappings_path = review_dir / "rename_mappings.json"
+        cli.run_phase1(
+            [source],
+            tmp_path,
+            mappings_path,
+            review_dir,
+            model="fake-model",
+            prompt=cli.DEFAULT_PROMPT,
+            prepend=False,
+            prefix="",
+            suffix="",
+            max_file_name_length=255,
+            num_frames_for_caption=3,
+            add_metadata=True,
+        )
+        out = capsys.readouterr().out
+        assert "configured prompt is not used" not in out
+
+
+class TestPrintPhase1NextSteps:
+    def _entry(self, status="ok", long_caption="a caption"):
+        return MappingEntry(
+            original_files=["a.MOV"],
+            new_stem="a caption",
+            status=status,
+            long_caption=long_caption,
+        )
+
+    def test_without_add_metadata_has_two_numbered_steps_and_no_bullet(
+        self, tmp_path, capsys
+    ):
+        review_dir = tmp_path / "review"
+        mappings_path = review_dir / "rename_mappings.json"
+        cli._print_phase1_next_steps(
+            review_dir, mappings_path, [self._entry()], add_metadata=False
+        )
+        out = capsys.readouterr().out
+        assert "1. Review the captions" in out
+        assert "2. Apply the renames" in out
+        assert "--add-metadata" not in out
+
+    def test_with_add_metadata_adds_bullet_under_step_2_with_count(
+        self, tmp_path, capsys
+    ):
+        review_dir = tmp_path / "review"
+        mappings_path = review_dir / "rename_mappings.json"
+        entries = [self._entry(), self._entry(status="error", long_caption=None)]
+        cli._print_phase1_next_steps(
+            review_dir, mappings_path, entries, add_metadata=True
+        )
+        out = capsys.readouterr().out
+        assert "2. Apply the renames" in out
+        bullet_index = out.index("- Description + Keywords generated for 1 group")
+        step2_index = out.index("2. Apply the renames")
+        assert bullet_index > step2_index
+        assert "--add-metadata" in out
+
+
+class TestMetadataTagLegendAndChanges:
+    def test_legend_lists_all_three_tag_families(self, capsys):
+        cli._print_metadata_tag_legend()
+        out = capsys.readouterr().out
+        assert "Title" in out and "ItemList:Title" in out and "XMP-dc:Title" in out
+        assert "com.apple.quicktime.title" in out
+        assert "Description" in out and "com.apple.quicktime.description" in out
+        assert "Keywords" in out and "com.apple.quicktime.keywords" in out
+
+    def test_changes_block_prints_actual_field_values(self, capsys):
+        entry = MappingEntry(
+            status="ok",
+            original_files=["a.MOV"],
+            new_stem="a red kayak",
+            short_caption="red kayak",
+            long_caption="A red kayak drifts across a lake.",
+            keywords=["kayak", "lake", "red"],
+        )
+        cli._print_metadata_changes(entry)
+        out = capsys.readouterr().out
+        assert "Metadata changes:" in out
+        assert "Short caption: red kayak" in out
+        assert "Title:         a red kayak" in out
+        assert "Description:   A red kayak drifts across a lake." in out
+        assert "Keywords:      kayak, lake, red" in out
+
+
+class TestRunPhase1VerboseMetadata:
+    def _stub_pipeline(self, monkeypatch, caption_text):
+        monkeypatch.setattr(cli, "validate_media_files", lambda files: (files, []))
+
+        def fake_extract_frames(source, output_dir, num_frames):
+            frame = output_dir / "frame_0.jpg"
+            frame.write_bytes(b"fake-frame-bytes")
+            return [frame]
+
+        monkeypatch.setattr(cli, "extract_frames", fake_extract_frames)
+        monkeypatch.setattr(cli, "generate_caption", lambda *a, **k: caption_text)
+        monkeypatch.setattr(
+            cli,
+            "build_montage",
+            lambda frame_paths, output_jpeg: output_jpeg.write_bytes(b"fake-montage"),
+        )
+
+    def test_verbose_prints_legend_once_and_block_per_group(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        source = touch(tmp_path / "a.MOV")
+        self._stub_pipeline(
+            monkeypatch,
+            "SHORT: red kayak\nLONG: A red kayak drifts across a lake.\n"
+            "KEYWORDS: kayak, lake, red",
+        )
+
+        review_dir = tmp_path / "review"
+        mappings_path = review_dir / "rename_mappings.json"
+        cli.run_phase1(
+            [source],
+            tmp_path,
+            mappings_path,
+            review_dir,
+            model="fake-model",
+            prompt="fake-plain-prompt",
+            prepend=False,
+            prefix="",
+            suffix="",
+            max_file_name_length=255,
+            num_frames_for_caption=3,
+            add_metadata=True,
+            verbose=True,
+        )
+
+        out = capsys.readouterr().out
+        assert out.count("Metadata tag mapping (--add-metadata):") == 1
+        assert out.count("Metadata changes:") == 1
+        assert "Short caption: red kayak" in out
+        assert "Description:   A red kayak drifts across a lake." in out
+        assert "Keywords:      kayak, lake, red" in out
+
+    def test_without_verbose_prints_neither_legend_nor_block(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        source = touch(tmp_path / "a.MOV")
+        self._stub_pipeline(
+            monkeypatch,
+            "SHORT: red kayak\nLONG: A red kayak drifts across a lake.\n"
+            "KEYWORDS: kayak, lake, red",
+        )
+
+        review_dir = tmp_path / "review"
+        mappings_path = review_dir / "rename_mappings.json"
+        cli.run_phase1(
+            [source],
+            tmp_path,
+            mappings_path,
+            review_dir,
+            model="fake-model",
+            prompt="fake-plain-prompt",
+            prepend=False,
+            prefix="",
+            suffix="",
+            max_file_name_length=255,
+            num_frames_for_caption=3,
+            add_metadata=True,
+        )
+
+        out = capsys.readouterr().out
+        assert "Metadata tag mapping" not in out
+        assert "Metadata changes:" not in out
+
+
+class TestRunPhase2VerboseMetadata:
+    def test_verbose_prints_legend_once_and_block_per_file(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        outcome = EmbedOutcome(embedded=True, preserved_fields=[])
+        monkeypatch.setattr(rename_module, "embed_metadata", lambda *a, **k: outcome)
+        touch(tmp_path / "a.MOV")
+        review_dir = tmp_path / "review"
+        review_dir.mkdir()
+        mappings_path = review_dir / "rename_mappings.json"
+        mappings_path.write_text("[]")
+        entries = [
+            MappingEntry(
+                status="ok",
+                original_files=["a.MOV"],
+                new_stem="a caption",
+                short_caption="a caption",
+                long_caption="A caption.",
+                keywords=["a"],
+                captioned_at="2026-09-14T18:32:07Z",
+            )
+        ]
+
+        cli.run_phase2(
+            entries,
+            tmp_path,
+            mappings_path,
+            generate_undo_script=False,
+            assume_yes=True,
+            add_metadata=True,
+            verbose=True,
+        )
+
+        out = capsys.readouterr().out
+        assert out.count("Metadata tag mapping (--add-metadata):") == 1
+        assert out.count("Metadata changes:") == 1
+        assert "Short caption: a caption" in out
+        assert "Description:   A caption." in out
+        assert "Keywords:      a" in out
+
+    def test_without_verbose_prints_neither_legend_nor_block(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        outcome = EmbedOutcome(embedded=True, preserved_fields=[])
+        monkeypatch.setattr(rename_module, "embed_metadata", lambda *a, **k: outcome)
+        touch(tmp_path / "a.MOV")
+        review_dir = tmp_path / "review"
+        review_dir.mkdir()
+        mappings_path = review_dir / "rename_mappings.json"
+        mappings_path.write_text("[]")
+        entries = [
+            MappingEntry(
+                status="ok",
+                original_files=["a.MOV"],
+                new_stem="a caption",
+                long_caption="A caption.",
+                keywords=["a"],
+            )
+        ]
+
+        cli.run_phase2(
+            entries,
+            tmp_path,
+            mappings_path,
+            generate_undo_script=False,
+            assume_yes=True,
+            add_metadata=True,
+        )
+
+        out = capsys.readouterr().out
+        assert "Metadata tag mapping" not in out
+        assert "Metadata changes:" not in out
+
+    def test_phase3_context_does_not_duplicate_legend(self, tmp_path, monkeypatch):
+        outcome = EmbedOutcome(embedded=True, preserved_fields=[])
+        monkeypatch.setattr(rename_module, "embed_metadata", lambda *a, **k: outcome)
+        touch(tmp_path / "a.MOV")
+        review_dir = tmp_path / "review"
+        review_dir.mkdir()
+        mappings_path = review_dir / "rename_mappings.json"
+        mappings_path.write_text("[]")
+        entries = [
+            MappingEntry(
+                status="ok",
+                original_files=["a.MOV"],
+                new_stem="a caption",
+                long_caption="A caption.",
+                keywords=["a"],
+            )
+        ]
+
+        printed = []
+        monkeypatch.setattr(
+            cli, "_print_metadata_tag_legend", lambda: printed.append(True)
+        )
+
+        cli.run_phase2(
+            entries,
+            tmp_path,
+            mappings_path,
+            generate_undo_script=False,
+            assume_yes=True,
+            add_metadata=True,
+            verbose=True,
+            phase3_newly_processed_ok=[],
+        )
+
+        assert printed == []

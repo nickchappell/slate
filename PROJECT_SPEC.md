@@ -42,9 +42,9 @@ useful than fixing one, re-running, and discovering the next.
    worth a distinct error message ("slate requires Apple Silicon; MLX does
    not support Intel Macs") rather than reusing check 1's wording.
 3. **`ffmpeg` on `PATH`** — `shutil.which("ffmpeg")` is not `None`.
-   Third-party (typically Homebrew-installed), so its absence is the most
-   likely of the four tool checks to actually trigger. Error message
-   should suggest the fix (e.g. `brew install ffmpeg`).
+   Third-party (typically Homebrew-installed), so its absence is one of the
+   most likely tool checks to actually trigger. Error message should
+   suggest the fix (e.g. `brew install ffmpeg`).
 4. **`ffprobe` on `PATH`** — `shutil.which("ffprobe")` is not `None`.
    Ships alongside `ffmpeg` in the same Homebrew package, but checked
    independently since it's a separate binary — a partial/corrupted
@@ -58,8 +58,15 @@ useful than fixing one, re-running, and discovering the next.
 6. **`sips` on `PATH`** — `shutil.which("sips")` is not `None`. Same
    rationale as `qlmanage`: a standard macOS system binary, checked
    defensively rather than because it's expected to actually fail.
+7. **`exiftool` on `PATH`** — `shutil.which("exiftool")` is not `None`.
+   Third-party (typically Homebrew-installed), same rationale as `ffmpeg`.
+   Checked unconditionally on every invocation, not just when metadata
+   embedding (`--add-metadata`/`--metadata-backfill`) is actually used —
+   keeps this check flat/mode-unaware like the rest of the list, at the
+   cost of requiring `exiftool` even for users who never touch those
+   flags. Error message should suggest the fix (`brew install exiftool`).
 
-**Scope note:** these checks only confirm the four binaries exist and are
+**Scope note:** these checks only confirm the five binaries exist and are
 executable — they say nothing about whether `ffmpeg`/`qlmanage` can decode
 any *particular* clip's codec. That's a separate, per-file concern already
 covered by the attempt-and-fallback ladder in Frame Extraction Strategy
@@ -619,6 +626,307 @@ real filesystem limit. Character-counting was chosen for simplicity; byte
 aware truncation is a possible future refinement if this proves to matter
 in practice.
 
+## Metadata Embedding
+
+Beyond the filename, `--add-metadata` embeds the VLM-generated caption as
+real, searchable QuickTime/XMP metadata (Title/Description/Keywords) on the
+renamed footage file itself — Spotlight-searchable, visible in Photos/
+QuickTime Player/DAM tools, and independent of the filename. A separate
+standalone mode, `--metadata-backfill`, retrofits this metadata onto files
+a past run already renamed, with no captioning prompt change needed to the
+main flow. Off by default in every mode — existing scripts calling `slate`
+get no new behavior or new requirements until `--add-metadata` is passed
+explicitly.
+
+### Metadata Containers
+
+Three independent containers exist in MOV/MP4, all written together:
+- **Classic `udta` atoms** (`©nam`/`©des`/`©key`, the iTunes/`ItemList`
+  family) — exiftool's `ItemList` group.
+- **`com.apple.quicktime.*` keys** — a newer, extensible `keys`/`ilst`
+  mechanism; exiftool's `Keys` group. Other vendors (GoPro, DJI, capture
+  apps like Lux Optics' Kino) write their own reverse-DNS keys into this
+  same mechanism alongside Apple's — this is exactly how slate's own
+  `com.slate.*` provenance keys (below) get embedded too.
+- **XMP** (`dc:title`/`dc:description`/`dc:subject`) — the schema most DAM
+  tools (Adobe Bridge, Lightroom, Premiere) search/filter against, and the
+  only one of the three where the keyword field is a true multi-value list
+  rather than a comma-joined string (see "Writing Mechanism," below).
+
+### Caption Generation: SHORT / LONG / KEYWORDS
+
+`--add-metadata` switches `inference.generate_caption()`'s prompt from the
+plain short-caption prompt to `config.METADATA_PROMPT`, asking for three
+labeled sections in one VLM call (one vision-encode pass regardless of how
+many sections the decoder produces afterward — cheap relative to a second
+encode):
+```
+SHORT: <3-6 words, for a filename>
+LONG: <one to two sentences>
+KEYWORDS: <6-10 comma-separated single words or short phrases>
+```
+`inference.MAX_CAPTION_TOKENS_WITH_METADATA` (140, a reasoned starting
+estimate pending empirical tuning against real footage) replaces the
+plain-caption `MAX_CAPTION_TOKENS` (25) budget for this path.
+`inference.parse_caption_sections()` splits the response on the
+`SHORT:`/`LONG:`/`KEYWORDS:` markers (order-independent, any subset may be
+absent — `--metadata-backfill`'s prompt below omits `SHORT:` entirely).
+KEYWORDS is the least-constrained of the three and the most likely to
+break format on a quantized model; if it's missing or doesn't parse as a
+comma list, `inference._derive_keywords_from_long()` falls back to a
+cheap, dependency-free derivation from LONG (tokenize, lowercase, strip
+punctuation, drop a small hardcoded stopword list, dedupe) — deliberately
+not real NLP (spaCy/nltk would cut against the lazy-import discipline in
+"Startup Time," above), and deliberately just a safety net: the model
+asked directly can name concepts it saw but never wrote as literal words
+("recreation," "watercraft"), which a mechanical word-strip can never
+recover.
+
+### Field Mapping
+
+| Generation | Classic (`ItemList`) | `Keys` (quicktime.\*) | XMP | List-type? |
+|---|---|---|---|---|
+| **SHORT** | *(filename only — not embedded)* | | | — |
+| **LONG** | `Description` | `Description` | `dc:Description` | no (single value) |
+| **KEYWORDS** | `Keyword` | `Keywords` | `dc:Subject` | XMP only |
+| **Title** | `Title` | `Title` | `dc:Title` | no |
+
+**Title is always the file's final `new_stem`** — the whole assembled
+filename stem, camera code included — computed fresh at embed time, right
+after the physical rename, never stored as its own JSON field. The
+filename is the human-edited source of truth (a reviewer routinely
+hand-adds words by renaming the preview JPEG), so deriving Title live
+makes drift structurally impossible.
+
+**Provenance namespace, not from caption text** — `metadata.py` mints its
+own reverse-DNS keys in the same `Keys` mechanism (idiomatic — the same
+thing GoPro/DJI do for their own vendor data): `com.slate.original-filename`
+(pre-rename stem/pair), `com.slate.app-version`, `com.slate.caption-model`,
+`com.slate.generated-at` (the *captioning* run's timestamp — carried on
+`MappingEntry.captioned_at`/`MetadataChangeEntry.captioned_at`, not
+whenever the embed happens to run, since Phase 1/Phase 2 or backfill's
+generate/apply can be arbitrarily far apart across the review checkpoint).
+
+**Deliberately never written:** `com.apple.quicktime.software` (means "the
+software that produced this file's *content*" — camera firmware/NLE/
+capture app, not a metadata post-processor; overwriting it would
+misrepresent real provenance) or any of `.make`/`.model`/`.creationdate`/
+`.location.*` (genuine camera-sourced values, read-only from slate's
+perspective).
+
+### Writing Mechanism: `exiftool`
+
+`metadata.py` shells out to `exiftool` (`subprocess`, not a Python
+library, not ffmpeg — `mutagen` has no `Keys`/XMP support, ffmpeg needs a
+full remux and can't write XMP) with `-overwrite_original` (no `_original`
+backup copy — a backup twin per clip would roughly double the footage
+directory's disk usage across a batch run).
+
+**Tag syntax is empirically verified**, not just inferred from
+documentation — against real `exiftool` (v13.55) and a synthetic ProRes
+`.mov`, confirming:
+- A bare `-Title=`/`-Description=` (no group prefix) resolves ambiguously
+  to `ItemList`, **not** `Keys` — reaching the `com.apple.quicktime.*`
+  namespace requires the explicit `-Keys:Title=` form.
+- `ItemList:Keyword` (singular) and `Keys:Keywords` (plural) are **not**
+  list-type tags — repeated flags overwrite rather than append, so both
+  are written once as a comma-joined string, matching the KEYWORDS field's
+  non-list entries in the table above.
+- `XMP-dc:Subject` genuinely is list-type — repeated `-XMP-dc:Subject=`
+  flags append, the one true multi-value list among the three families.
+- Arbitrary custom tag names (`-com.slate.app-version=...`) are rejected
+  outright ("Invalid tag name") — `exiftool` requires a user-defined-tag
+  config for any name it doesn't already know. `QuickTime.pm`'s built-in
+  `Keys` table shows the mechanism: a hash key that already starts with
+  `"com."` (see its own built-in `com.android.*`/`com.xiaomi.*` entries)
+  is written to the moov atom as that literal string with no
+  `"com.apple.quicktime."` prefix added — exactly what GoPro/DJI rely on
+  for their own keys. `metadata._EXIFTOOL_CONFIG` defines the seven
+  `com.slate.*`/`com.slate.original-*` tags this way; confirmed by
+  grepping a written file's raw bytes for the literal string
+  `"com.slate.app-version"`. The config is generated once per process into
+  a temp file (`metadata._exiftool_config_path()`) rather than shipped as
+  a bundled package resource, to stay packaging-config-free.
+
+**Pre-write collision check — read-before-write, preserve-then-overwrite.**
+Camera-original footage typically has empty Title/Description/Keywords,
+but this can't be assumed for every manufacturer/workflow (and backfill
+mode specifically runs on files that already had at least one prior
+processing pass). Before each write, `metadata.read_existing_metadata()`
+issues one `exiftool -j` read for Title/Description/Keywords plus
+`com.slate.*` presence (this same read also serves as backfill's
+idempotency check — see below, no second subprocess call needed). Any
+non-empty pre-existing field is copied into the matching
+`com.slate.original-*` key before being overwritten, independently per
+field. This bare-name read is deliberately ambiguous across
+`ItemList`/`Keys`/`XMP-dc` when more than one is populated — accepted,
+since slate itself always writes all three families together (so they
+agree on a slate-written file) and the check only needs "is there
+*something* pre-existing to preserve," not which family it came from.
+Structurally safe regardless of manufacturer either way: `exiftool` only
+ever touches the tags named explicitly on the command line, never `-all=`
+or an equivalent blanket clear, so vendor-proprietary tracks (GoPro GPMF,
+DJI atoms, a Kino/Halide-style `mebx` timed-metadata track) and genuine
+camera fields stay untouched no matter what gets embedded.
+
+**Error handling — skip-and-warn, not abort.** By the time
+`metadata.embed_metadata()` runs, the physical rename has already
+happened (see "Where This Runs," below), so a single file's `exiftool`
+failure (permission error, disk full) warns and skips just that file's
+metadata rather than aborting the rest of the rename batch — the same
+"warning + skip" precedent as the MOV/MP4 pairing edge case above. A
+warned-and-skipped file is already renamed to its final name, so it's a
+normal `--metadata-backfill` candidate afterward — that's the retry path,
+no separate mechanism needed.
+
+### `rename_mappings.json` Schema Additions
+
+`MappingEntry` gains four fields, populated only under `--add-metadata`,
+`None` otherwise (backward compatible with mapping files predating this
+feature): `short_caption` (the SHORT text — JSON-editable alternative to
+renaming the preview JPEG), `long_caption`, `keywords`, `captioned_at`.
+
+**Reconciliation, JPEG rename vs. `short_caption` edit.**
+`review_sync.reconcile_short_caption_edits()` runs after the existing
+JPEG-hash sync in Phase 2, scoped to `--add-metadata`-generated entries
+(`long_caption`/`keywords` populated) whose `short_caption_locked` field
+is not set — a JPEG rename is the more direct, unambiguous signal and
+wins. Within that scope, `short_caption` becomes the authoritative source
+for the caption portion of `new_stem` (recomputed via
+`filenames.assemble_stem()`), superseding a direct `new_stem` edit;
+non-`--add-metadata` batches are completely unaffected, so the pre-existing
+direct-`new_stem`-editing workflow keeps working unmodified for them.
+
+`short_caption_locked` is a **persisted** field on `MappingEntry`, set
+`True` by `review_sync.sync_from_review()` the moment it applies a JPEG
+rename, not merely a same-invocation marker — this matters because
+`sync_from_review()`'s save happens *before* the final rename
+confirmation prompt, so a declined or interrupted run still persists the
+synced `new_stem` to disk. A first implementation tracked "was this
+entry just synced" only within the current call (a same-run `set[int]` of
+object ids passed into `reconcile_short_caption_edits()`), which broke
+across exactly that declined-then-rerun sequence: a later invocation
+where the JPEG already matched what was stored had nothing new to sync
+(correctly, a no-op), but with no persisted record that the name came
+from a human JPEG rename, `reconcile_short_caption_edits()` would
+confidently recompute it from the stale `short_caption` field and
+silently clobber the human's choice. The fix replaced the same-run set
+with this durable per-entry flag, which also simplified
+`reconcile_short_caption_edits()`'s signature (no longer needs the caller
+to compute and pass anything about this run's sync activity).
+
+### CLI Flags
+
+- **`--add-metadata`** — combinable with `--dry-run`/`--rename-only`/
+  `--process-and-rename`. Must be passed again at `--rename-only` time
+  even if the loaded mapping file already has `long_caption`/`keywords`
+  populated — never inferred from the JSON's contents, so an existing
+  automated `--rename-only` invocation never starts writing metadata just
+  because a human (or later tooling) added those fields. If it's missing
+  when the JSON has them, `run_phase2()` warns loudly (not a silent
+  no-op) that metadata was generated but won't be written this run.
+  `--rename-only` (Phase 2) still never touches `mlx_vlm` — missing
+  `long_caption`/`keywords` on an "ok" entry is warn-and-skip for that
+  entry's metadata specifically, never an on-the-fly VLM call.
+- **`--verbose`/`-v`** — modifier, only adds output alongside
+  `--add-metadata` (a silent no-op otherwise). `cli._print_metadata_tag_legend()`
+  prints the Title/Description/Keywords → `ItemList`/`Keys`
+  (`com.apple.quicktime.*`)/`XMP-dc` mapping once per run — it never varies,
+  so it's not worth repeating per group. `cli._print_metadata_changes()`
+  then prints per group in Phase 1, or per physical file in Phase 2/3
+  (right before that file's "Metadata embedded" line) — short caption,
+  Title (`new_stem`), Description (`long_caption`), Keywords — the actual
+  values that *do* vary, otherwise visible only by opening
+  `rename_mappings.json` or running `exiftool` after the fact. In
+  `--process-and-rename`, the legend prints once from Phase 1's
+  `run_phase1()` call; `run_phase2()` skips its own legend print whenever
+  `phase3_newly_processed_ok` is set, so a combined invocation never prints
+  it twice.
+- **`--metadata-backfill`** — standalone mode (see below), mutually
+  exclusive with `--rename-only`/`--process-and-rename`/`--add-metadata`
+  (backfill never renames, and its metadata write isn't optional the way
+  `--add-metadata` is) and with `--model-update-check`. Combines freely
+  with `--dry-run` (selects backfill's generate vs. apply step) — not a
+  simple pairwise conflict `argparse`'s `add_mutually_exclusive_group()`
+  can express alone, so `cli._validate_mode_flags()` handles it as a
+  manual post-parse check instead of folding it into `mode_group`.
+- **`add_metadata: bool = False`** mirrors `config.toml`'s existing
+  `prepend_generated_name` field exactly: dataclass default → `[defaults]`
+  TOML key → CLI flag (`store_true`) → `cli._effective_settings()`
+  precedence (`True` if the flag was passed, else the config value).
+
+### Where This Runs in the Pipeline
+
+Everything above is what `--add-metadata` turns on; **Phase 2**
+(`rename.perform_renames()`) is where the embed call slots in, run per
+physical file right after that file's own rename (both the `.MOV` and
+`.MP4` in a pair get independent `exiftool` writes, not one call per
+group) — Title needs the file's actual final name to exist on disk first.
+**Phase 3** inherits this for free, since it reuses Phase 2's
+rename-execution mechanics wholesale; its reconciliation step is a no-op
+there (no review checkpoint, so nothing could have diverged between
+`short_caption` and a hand-renamed JPEG).
+
+### Undo Script: Title Reverts Too
+
+Since Title always mirrors `new_stem`, undoing a rename without also
+resetting Title would leave a reverted file's embedded Title pointing at
+its post-rename caption text. `rename.RenameLogEntry.metadata_embedded`
+tracks, per file, whether that specific file's embed actually succeeded
+(not just whether `--add-metadata` was passed for the batch — the
+skip-and-warn policy above means some files may end up with no metadata
+even in an `--add-metadata` run). `write_undo_script()` emits an
+`exiftool -overwrite_original -ItemList:Title=... -Keys:Title=...
+-XMP-dc:Title=...` line immediately after each such entry's `mv` line
+(ordering matters: if the `exiftool` call then fails, the file is already
+correctly renamed back — a stale Title is a strictly better
+partial-failure state than a wrongly-named file), and a one-time
+`command -v exiftool` presence guard at the top of the script, but only
+when the script actually contains at least one such line — a plain
+rename-only batch's undo script is byte-identical to one generated before
+this feature existed. Description/Keywords/`com.slate.*` are deliberately
+**not** reset: they describe the clip's content or its processing
+history, neither of which changes when a filename is undone.
+
+### Backfill Mode: `--metadata-backfill`
+
+Retrofits metadata onto files a past `slate` run already renamed (before
+this feature existed, or simply without `--add-metadata`), with no
+renaming involved. Almost none of the rename-specific machinery applies —
+no `filenames.assemble_stem()`/disambiguation, no `rename.py` execution,
+no `review_sync.py` JPEG-hash reconciliation (SHORT/Title isn't editable
+here at all — it's just whatever the file is already named). What
+carries over unmodified: `pairing.py` (still groups by shared stem) and
+`extraction.py` (frame sampling doesn't care about filenames). Lives in
+its own module, `backfill.py`, kept separate from `cli.py` rather than
+grown into it.
+
+**Generate step** (`--metadata-backfill --dry-run --input-dir=...`) —
+`backfill.run_backfill_generate()` mirrors Phase 1's shape (scan, pair,
+caption, incremental re-run keyed by `current_files` instead of
+`original_files`), but uses `config.METADATA_BACKFILL_PROMPT` — the same
+SHORT/LONG/KEYWORDS format with the `SHORT:` line dropped entirely, since
+nothing would spend decode tokens on a caption that's discarded. `title`
+is populated from the file's current name (informational only, not
+authoritative), and the preview JPEG is named directly after that stem —
+no tmp-name-then-rename dance like Phase 1's needed, since a group's
+current filename is already guaranteed unique on disk. Writes
+`review/metadata_changes.json` (`MetadataChangeEntry`: `current_files`,
+`title`, `long_caption`, `keywords`, `preview_jpeg`,
+`source_used_for_caption`, `captioned_at`).
+
+**Apply step** (`--metadata-backfill --metadata-mappings=...`, no
+`--dry-run`) — `backfill.run_backfill_apply()` re-checks every file still
+exists, **re-derives `title` live from each file's actual current name**
+(never trusts the stored field — same principle as Title everywhere else
+in this design), confirms, then calls `metadata.embed_metadata()` directly
+per file (no `rename.py` involvement). Skips files whose
+`read_existing_metadata()` already shows `has_slate_provenance=True` (the
+idempotency guard folded into that same read call), reporting them
+separately in the completion summary. Archives the mapping file to
+`applied_metadata_changes_<timestamp>.json` on completion, mirroring the
+`applied_renames_<timestamp>.json` convention.
+
 ## Workflow Modes: Dry-Run → Rename, or Combined
 
 Rationale: decouple the slow/expensive step (decode + inference) from the
@@ -1131,8 +1439,11 @@ Extraction Strategy, above); built-in default is `3`.
 values with no corresponding CLI flag (see Filename Assembly and Model /
 Inference, above, respectively) — everything else in `config.toml`
 (`prepend_generated_name`/`prefix`/`suffix`, `model`,
-`num_frames_for_caption`, `generate_undo_script`) has a matching flag it
-can be overridden with.
+`num_frames_for_caption`, `generate_undo_script`, `add_metadata`) has a
+matching flag it can be overridden with. `add_metadata` mirrors
+`prepend_generated_name`'s wiring exactly (see "Metadata Embedding,"
+above) — default `False` at every layer, so an unset config still behaves
+exactly like before this field existed.
 
 **Format:** TOML — matches `pyproject.toml`, human-editable with comments,
 unlike `rename_mappings.json`/`applied_renames_*.json` which are machine-written
@@ -1165,16 +1476,19 @@ slate/
 ├── src/
 │   └── slate/
 │       ├── __init__.py
+│       ├── backfill.py    # --metadata-backfill mode (Metadata Embedding, above)
 │       ├── cli.py         # argument parsing + phase orchestration
 │       ├── config.py      # config file resolution/parsing (Configuration, above)
 │       ├── extraction.py  # frame extraction fallback ladder (Frame Extraction Strategy, above)
 │       ├── filenames.py   # filename assembly + truncation (Filename Assembly, above)
 │       ├── inference.py   # model resolution/caching + captioning (Model Caching, above)
-│       ├── mappings.py    # rename_mappings.json read/write + disambiguation
+│       ├── mappings.py    # rename_mappings.json/metadata_changes.json read/write + disambiguation
+│       ├── metadata.py    # exiftool write mechanism (Metadata Embedding, above)
 │       ├── output.py      # centralized colorized/emoji console output
 │       ├── pairing.py     # MOV/MP4 pairing logic (File Pairing & Source Selection, above)
 │       ├── preflight.py   # startup platform/binary checks (Preflight Checks, above)
-│       └── rename.py      # rename plan/execution, audit trail, undo script
+│       ├── rename.py      # rename plan/execution, audit trail, undo script
+│       └── review_sync.py # reconciles rename_mappings.json against human JPEG renames
 ```
 
 ```toml

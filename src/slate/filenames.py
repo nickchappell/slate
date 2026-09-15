@@ -30,6 +30,19 @@ def normalize_caption(raw: str) -> str:
     return text
 
 
+def normalize_long_caption(raw: str) -> str:
+    # LONG (--add-metadata's Description text) is a proper-case, period-
+    # terminated sentence per spec/metadata-embedding.md's worked examples
+    # -- unlike SHORT, it must NOT go through normalize_caption()'s
+    # force-lowercase + trailing-punctuation-strip, which would mangle it.
+    # Whitespace-collapse + surrounding-quote-strip only.
+    text = "".join(" " if ch in _FILESYSTEM_UNSAFE_CHARS else ch for ch in raw)
+    text = " ".join(text.split())
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in "\"'":
+        text = text[1:-1].strip()
+    return text
+
+
 def truncate_caption(caption: str, max_length: int = CAPTION_LENGTH_CAP) -> str:
     # Cut at the last whitespace boundary at or before max_length, never
     # mid-word. No ellipsis or other marker is appended.

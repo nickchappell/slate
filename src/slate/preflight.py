@@ -44,5 +44,6 @@ def run_preflight_checks() -> list[str]:
             "This is a standard macOS system binary; its absence suggests an "
             "unusual environment (minimal/managed image, stripped-down runner).",
         ),
+        _check_binary("exiftool", "Install it with: brew install exiftool"),
     ]
     return [message for message in checks if message is not None]

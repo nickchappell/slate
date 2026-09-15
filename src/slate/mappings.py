@@ -20,6 +20,31 @@ class MappingEntry:
     preview_jpeg_sha256: str | None = None
     source_used_for_caption: str | None = None
     error: str | None = None
+    # Populated only under --add-metadata (see spec/metadata-embedding.md).
+    # short_caption is the JSON-editable alternative to renaming the
+    # preview JPEG; long_caption/keywords have no filename equivalent.
+    # captioned_at isn't in the original design doc's field list -- added
+    # so com.slate.generated-at reflects the actual captioning run rather
+    # than whenever --rename-only happens to execute across the review
+    # checkpoint.
+    short_caption: str | None = None
+    long_caption: str | None = None
+    keywords: list[str] | None = None
+    captioned_at: str | None = None
+    # Set True by review_sync.sync_from_review() the moment a human's JPEG
+    # rename is first applied, and persisted from then on -- NOT just a
+    # same-run flag. sync_from_review()/reconcile_short_caption_edits() can
+    # run across separate invocations (sync-and-save happens before the
+    # final confirmation prompt, so a declined/interrupted run still
+    # persists the synced new_stem); without a durable marker, a later run
+    # where the JPEG already matches has nothing to sync (correctly, a
+    # no-op) but also no way to tell "this name came from a JPEG rename in
+    # an earlier run" from "this name was never touched" -- and would
+    # silently clobber the human's choice back to short_caption's text.
+    # Once True, only another JPEG rename (never a short_caption edit)
+    # moves the name again -- matches the pre-existing precedent that a
+    # JPEG rename already wins over a direct new_stem edit too.
+    short_caption_locked: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {
@@ -31,6 +56,11 @@ class MappingEntry:
             d["preview_jpeg"] = self.preview_jpeg
             d["preview_jpeg_sha256"] = self.preview_jpeg_sha256
             d["source_used_for_caption"] = self.source_used_for_caption
+            d["short_caption"] = self.short_caption
+            d["long_caption"] = self.long_caption
+            d["keywords"] = self.keywords
+            d["captioned_at"] = self.captioned_at
+            d["short_caption_locked"] = self.short_caption_locked
         else:
             d["error"] = self.error
         return d
@@ -45,6 +75,11 @@ class MappingEntry:
             preview_jpeg_sha256=d.get("preview_jpeg_sha256"),
             source_used_for_caption=d.get("source_used_for_caption"),
             error=d.get("error"),
+            short_caption=d.get("short_caption"),
+            long_caption=d.get("long_caption"),
+            keywords=d.get("keywords"),
+            short_caption_locked=d.get("short_caption_locked", False),
+            captioned_at=d.get("captioned_at"),
         )
 
 
@@ -152,3 +187,82 @@ def disambiguate(
         disambiguated.append(entry)
 
     return disambiguated
+
+
+@dataclass
+class MetadataChangeEntry:
+    # review/metadata_changes.json's group shape -- see "Backfill mode" in
+    # spec/metadata-embedding.md. current_files (not original_files): these
+    # are already-renamed files, there's no earlier "original" name tracked
+    # here.
+    status: str  # "ok" or "error"
+    current_files: list[str]
+    title: str | None = None  # informational only, re-derived live at apply
+    long_caption: str | None = None
+    keywords: list[str] | None = None
+    preview_jpeg: str | None = None
+    source_used_for_caption: str | None = None
+    error: str | None = None
+    # Not in the original design doc's literal field list -- added for the
+    # same reason as MappingEntry.captioned_at: generate and apply can run
+    # arbitrarily far apart, so com.slate.generated-at needs the actual
+    # captioning-time timestamp, not whenever apply happens to run.
+    captioned_at: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        d: dict[str, Any] = {
+            "status": self.status,
+            "current_files": self.current_files,
+        }
+        if self.status == "ok":
+            d["title"] = self.title
+            d["long_caption"] = self.long_caption
+            d["keywords"] = self.keywords
+            d["preview_jpeg"] = self.preview_jpeg
+            d["source_used_for_caption"] = self.source_used_for_caption
+            d["captioned_at"] = self.captioned_at
+        else:
+            d["error"] = self.error
+        return d
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> MetadataChangeEntry:
+        return cls(
+            status=d["status"],
+            current_files=list(d["current_files"]),
+            title=d.get("title"),
+            long_caption=d.get("long_caption"),
+            keywords=d.get("keywords"),
+            preview_jpeg=d.get("preview_jpeg"),
+            source_used_for_caption=d.get("source_used_for_caption"),
+            error=d.get("error"),
+            captioned_at=d.get("captioned_at"),
+        )
+
+
+def load_metadata_changes(path: Path) -> list[MetadataChangeEntry]:
+    data = _load_raw(path)
+    groups = data.get("groups", []) if isinstance(data, dict) else data
+    return [MetadataChangeEntry.from_dict(d) for d in groups]
+
+
+def save_metadata_changes(path: Path, entries: list[MetadataChangeEntry]) -> None:
+    data = {
+        "app_version": APP_VERSION,
+        "groups": [e.to_dict() for e in entries],
+    }
+    with path.open("w") as f:
+        json.dump(data, f, indent=2)
+        f.write("\n")
+
+
+def find_existing_metadata_change(
+    existing: list[MetadataChangeEntry], current_files: list[str]
+) -> MetadataChangeEntry | None:
+    # Set-match, same rationale as find_existing_match -- lets a re-run of
+    # --metadata-backfill --dry-run skip files already in the JSON.
+    target = set(current_files)
+    for entry in existing:
+        if set(entry.current_files) == target:
+            return entry
+    return None

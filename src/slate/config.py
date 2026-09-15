@@ -20,6 +20,26 @@ punctuation, no preamble like "the image shows" or "this is a picture of".
 Example output: waves crashing on rocky shore
 """
 
+# Fixed prompts for --add-metadata/--metadata-backfill -- see "Caption
+# generation" in spec/metadata-embedding.md. Not Config fields / not
+# config.toml-overridable: parse_caption_sections() depends on the exact
+# SHORT:/LONG:/KEYWORDS: label format, so letting a user's `prompt` override
+# apply here would silently break parsing.
+METADATA_PROMPT = """\
+Analyze this clip and respond in exactly this format:
+SHORT: <3-6 words, for a filename>
+LONG: <one to two sentences>
+KEYWORDS: <6-10 comma-separated single words or short phrases naming
+subjects, actions, and setting -- no articles, no full sentences>
+"""
+
+METADATA_BACKFILL_PROMPT = """\
+Analyze this clip and respond in exactly this format:
+LONG: <one to two sentences>
+KEYWORDS: <6-10 comma-separated single words or short phrases naming
+subjects, actions, and setting -- no articles, no full sentences>
+"""
+
 
 @dataclass(frozen=True)
 class Config:
@@ -31,6 +51,7 @@ class Config:
     prompt: str = DEFAULT_PROMPT
     max_file_name_length: int = DEFAULT_MAX_FILE_NAME_LENGTH
     num_frames_for_caption: int = DEFAULT_NUM_FRAMES_FOR_CAPTION
+    add_metadata: bool = False
 
 
 def resolve_config_path() -> Path:
@@ -75,4 +96,5 @@ def load_config(path: Path | None = None) -> Config:
         num_frames_for_caption=table.get(
             "num_frames_for_caption", base.num_frames_for_caption
         ),
+        add_metadata=table.get("add_metadata", base.add_metadata),
     )

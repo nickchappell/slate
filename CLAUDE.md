@@ -17,7 +17,8 @@ Decisions and Opinions" section is a shorter map of the same material.
 - Requires **macOS on Apple Silicon** — `mlx-vlm` doesn't run anywhere else,
   and ProRes RAW frame extraction depends on macOS-only frameworks. Preflight
   checks in `preflight.py` enforce this (and the presence of `ffmpeg`,
-  `ffprobe`, `qlmanage`, `sips`) at the start of every invocation.
+  `ffprobe`, `qlmanage`, `sips`, `exiftool`) at the start of every
+  invocation.
 - `uv sync` (or `make install`) installs project + dev dependencies into
   `.venv`.
 - Config file is optional: `~/.config/slate/config.toml` (or `$SLATE_CONFIG`).
@@ -94,9 +95,29 @@ with a human review checkpoint in between:
 - **`--model-update-check`** — the sole explicit way to check the Hub for a
   newer model revision; every other mode resolves the model from the local
   `huggingface_hub` cache with no network call.
+- **`--add-metadata`** — modifier, combinable with the three phases above
+  (off by default). Embeds the caption as real Title/Description/Keywords
+  metadata via `exiftool` (see `metadata.py`), not just the filename;
+  written per file right after that file's own rename in Phase 2.
+- **`--verbose`/`-v`** — modifier, only adds output with `--add-metadata`.
+  Prints a one-time legend mapping Title/Description/Keywords to their
+  ItemList/Keys (`com.apple.quicktime.*`)/XMP-dc tags, then per group (Phase
+  1) or per physical file (Phase 2, right before that file's "Metadata
+  embedded" line) prints the actual short caption/Title/Description/
+  Keywords values about to be (or already) written. `--process-and-rename`
+  prints the legend once, not twice, across its combined Phase 1 + 2 run.
+- **`--metadata-backfill`** — standalone mode (see `backfill.py`),
+  mutually exclusive with the rename-flow flags above. Retrofits metadata
+  onto files a past run already renamed, via its own
+  `review/metadata_changes.json` generate/apply cycle; no renaming.
 
 Module layout under `src/slate/`:
 
+- `backfill.py` — standalone `--metadata-backfill` mode: retrofits
+  Title/Description/Keywords metadata onto files a past run already
+  renamed, no renaming involved. Mirrors Phase 1's generate/apply shape
+  but keyed on `current_files`, with no `filenames.py`/`rename.py`/
+  `review_sync.py` involvement
 - `cli.py` — argument parsing (`argparse`, not `click`/`typer` — see
   "Language / Packaging" in `PROJECT_SPEC.md` for why) + phase orchestration
 - `config.py` — config file resolution/parsing; precedence is CLI flags >
@@ -118,9 +139,15 @@ Module layout under `src/slate/`:
   populated by `_ensure_*_deps()`) so non-captioning runs don't pay the
   ~0.9s import — see "Startup Time" in `PROJECT_SPEC.md`; don't "tidy"
   those placeholders into normal imports
-- `mappings.py` — `rename_mappings.json` read/write + disambiguation
-  (`_2`/`_3`... suffixes on output-name collisions) + `app_version`
-  stamping/major-version-mismatch check
+- `mappings.py` — `rename_mappings.json`/`metadata_changes.json` read/write
+  + disambiguation (`_2`/`_3`... suffixes on output-name collisions) +
+  `app_version` stamping/major-version-mismatch check
+- `metadata.py` — `--add-metadata`'s `exiftool` write mechanism: embeds
+  Title/Description/Keywords across `ItemList`/`Keys`/XMP plus
+  `com.slate.*` provenance, with a read-before-write collision check that
+  preserves any pre-existing values into `com.slate.original-*`. Tag
+  syntax is empirically verified against real `exiftool`, not just docs —
+  see "Metadata Embedding" in `PROJECT_SPEC.md`
 - `output.py` — centralized `rich`-based colorized console output
 - `pairing.py` — MOV/MP4 pairing: verifies same-stem files via `ffprobe`
   duration/frame-count before trusting either as a stand-in for the other;
@@ -204,4 +231,12 @@ Opinions") when it lands.
 None currently open. (Multi-frame input for VLM inference — sampling
 several frames per clip, fed to the model as one native multi-image call,
 with a composited left-to-right strip as the review-only preview JPEG —
-landed; see "Frame Extraction Strategy" in `PROJECT_SPEC.md`.)
+landed; see "Frame Extraction Strategy" in `PROJECT_SPEC.md`. Metadata
+embedding — `--add-metadata`/`--metadata-backfill`, writing the caption as
+real QuickTime/XMP Title/Description/Keywords via `exiftool`, not just the
+filename — also landed; see "Metadata Embedding" in `PROJECT_SPEC.md`.
+Two items from that design remain genuinely open, not yet empirically
+confirmed: `MAX_CAPTION_TOKENS_WITH_METADATA`'s value (a reasoned
+estimate, not measured) and the `com.apple.quicktime.*`/XMP write-time
+benchmark against a large real ProRes RAW file — both need real fixture
+footage in `tests/fixtures/footage/`, still empty as of this writing.)

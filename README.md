@@ -27,6 +27,8 @@ Personal-use tool. See `PROJECT_SPEC.md` for the full design.
   - [Phase 2 -- `--rename-only`](#phase-2------rename-only)
   - [Phase 3 -- `--process-and-rename`](#phase-3------process-and-rename)
   - [Other flags](#other-flags)
+  - [Embedding Metadata -- `--add-metadata`](#embedding-metadata----add-metadata)
+  - [Metadata Backfill -- `--metadata-backfill`](#metadata-backfill----metadata-backfill)
 - [Under the Hood](#under-the-hood)
 - [Development](#development)
   - [Cutting a release](#cutting-a-release)
@@ -83,15 +85,19 @@ slate --input-dir ~/Movies/Footage --process-and-rename
   (`/usr/bin/qlmanage`, `/usr/bin/sips`), present on any normal install.
   `slate` checks for them anyway as a defensive guard against unusual
   environments (minimal/managed images, stripped-down runners).
+- **`exiftool`** on `PATH` -- not bundled with macOS. Install via Homebrew:
+  ```bash
+  brew install exiftool
+  ```
 - **[`uv`](https://docs.astral.sh/uv/)** for installing/running the tool.
 - **`make`** -- only needed for development (running the `Makefile` targets:
   tests, lint, formatting, releases); not required to install or run
   `slate` itself.
 
-The platform/`ffmpeg`/`ffprobe`/`qlmanage`/`sips` requirements above are
-checked once at the start of every `slate` invocation (see "Preflight
-Checks" in `PROJECT_SPEC.md`); every problem is reported together, not
-one-at-a-time.
+The platform/`ffmpeg`/`ffprobe`/`qlmanage`/`sips`/`exiftool` requirements
+above are checked once at the start of every `slate` invocation (see
+"Preflight Checks" in `PROJECT_SPEC.md`); every problem is reported
+together, not one-at-a-time.
 
 ### Installing `slate` onto your `$PATH`
 
@@ -134,8 +140,11 @@ goes through `huggingface_hub`'s standard cache, not anything `slate`-specific:
 
 ## Usage
 
-`slate` has three mutually-exclusive modes, exactly one of which is required
-per invocation:
+`slate`'s primary modes (`--dry-run`, `--rename-only`, `--process-and-rename`,
+`--model-update-check`) are mutually exclusive -- exactly one is required per
+invocation. `--add-metadata` is an optional modifier combinable with the
+first three (see "Other flags," below); `--metadata-backfill` is a separate,
+standalone mode covered in its own section further down.
 
 ### Phase 1 -- `--dry-run`
 
@@ -239,6 +248,8 @@ slate --input-dir ~/Movies/Footage --process-and-rename
 | Flag | Effect |
 | --- | --- |
 | `--model REPO_ID` | Override the VLM used for captioning (any Hugging Face repo ID `mlx-vlm` supports). |
+| `--add-metadata` | Also embed the caption as real Title/Description/Keywords metadata via `exiftool`, not just the filename -- see "Embedding Metadata," below. |
+| `--verbose` / `-v` | With `--add-metadata`, also print each group's short caption/long caption/keywords and the exact Title/Description/Keywords values about to be (or already) written, plus a one-time legend mapping those to the ItemList/Keys(`com.apple.quicktime.*`)/XMP-dc tags. |
 | `--prepend-generated-name` / `--append-generated-name` | Caption before or after the original filename (mutually exclusive; default: append). |
 | `--prefix TEXT` / `--suffix TEXT` | Wrap the whole assembled name, e.g. a shoot's location known ahead of time. |
 | `--skip-generate-undo-script` | Suppress the undo script written after Phase 2/3 (on by default). |
@@ -253,6 +264,84 @@ since they're not the kind of thing worth retyping per invocation. Copy
 `SLATE_CONFIG` environment variable at a copy kept elsewhere) to set
 defaults so you don't have to repeat flags across runs -- **CLI flags always
 win over the config file**, which always wins over built-in defaults.
+
+### Embedding Metadata -- `--add-metadata`
+
+Combine with any of the three phases above to also embed the caption as
+real Title/Description/Keywords metadata on the file itself, not just the
+filename -- Spotlight-searchable, visible in Photos/QuickTime Player/DAM
+tools, and independent of whatever the file ends up named:
+
+```bash
+# Phase 1: captioning also produces Description + Keywords, saved into
+# rename_mappings.json (as long_caption/keywords) for review alongside
+# the usual filename caption.
+slate --input-dir ~/Movies/Footage --dry-run --add-metadata
+
+# Phase 2: --add-metadata must be passed again here, explicitly -- it's
+# never inferred from the mapping file already having captions saved, so
+# an existing automated --rename-only invocation never starts writing
+# metadata just because the JSON happens to contain it.
+slate --input-dir ~/Movies/Footage --rename-only \
+      --rename-mappings=review/rename_mappings.json --add-metadata
+
+# Or combined -- same rule applies, one flag covers both phases:
+slate --input-dir ~/Movies/Footage --process-and-rename --add-metadata
+```
+
+If a mapping file has generated captions but `--add-metadata` is left off
+at `--rename-only` time (easy to do by accident), `slate` won't silently
+skip writing metadata -- it warns loudly that metadata was generated for
+this batch but won't be written this run, then proceeds with the rename
+only. A pre-existing Title/Description/Keywords from another tool (an NLE,
+a different capture app) is preserved into a `com.slate.original-*` field
+before being overwritten, never silently lost. Undoing a rename
+(`undo_renames_<timestamp>.sh`) resets the embedded Title back too, so it
+never drifts from the reverted filename; Description/Keywords are left as
+embedded, since they describe the clip's content, not its name.
+
+Add `--verbose`/`-v` to see exactly what's being written, without having to
+open `rename_mappings.json` or run `exiftool` yourself:
+
+```bash
+slate --input-dir ~/Movies/Footage --dry-run --add-metadata --verbose
+```
+
+prints a one-time legend for how Title/Description/Keywords map onto the
+`ItemList`/`Keys` (`com.apple.quicktime.*`)/XMP tag families, then each
+group's actual short caption, Title, Description, and Keywords values.
+No effect without `--add-metadata`.
+
+### Metadata Backfill -- `--metadata-backfill`
+
+A separate, standalone mode for embedding metadata into files a past
+`slate` run already renamed (or any already-appropriately-named files) --
+no renaming happens in this mode. Like the main flow, it's a two-step
+generate-then-apply process, using its own `review/metadata_changes.json`:
+
+```bash
+# Generate step: samples frames, captions each file, writes
+# review/metadata_changes.json + preview JPEGs. Nothing is embedded yet.
+slate --metadata-backfill --dry-run --input-dir ~/Movies/Footage
+
+# Review review/metadata_changes.json (and its preview JPEGs), then apply:
+slate --metadata-backfill --metadata-mappings=review/metadata_changes.json
+```
+
+The generate step only produces Description/Keywords -- there's no
+filename caption to generate here, so no `SHORT:` section is requested
+from the model. The apply step re-derives each file's Title **live from
+its actual current filename** (never trusted from the JSON, in case the
+file got renamed again in the meantime), re-checks every file still
+exists, confirms, then embeds via `exiftool` -- skipping any file that
+already carries `slate`'s own metadata from a prior run. On success, the
+mapping file is archived to `review/applied_metadata_changes_<timestamp>.json`.
+
+`--metadata-backfill` is mutually exclusive with
+`--rename-only`/`--process-and-rename`/`--add-metadata` -- it never
+renames anything, and its metadata write isn't optional the way
+`--add-metadata` is. See "Metadata Embedding" in `PROJECT_SPEC.md` for the
+full design.
 
 ## Under the Hood
 
@@ -369,8 +458,8 @@ make create-release PART=minor # bump-version, push, then github-release
 ## Tests
 
 The suite is split into two layers -- fast mocked unit tests, and slower
-integration tests that exercise real `ffmpeg`/`qlmanage`/`mlx-vlm` against
-real footage.
+integration tests that exercise real `ffmpeg`/`qlmanage`/`mlx-vlm`/`exiftool`
+against real footage.
 
 **To run unit tests only:**
 
@@ -379,9 +468,10 @@ uv run pytest tests/ --ignore=tests/integration
 ```
 
 Fully mocked -- no `ffmpeg`, no real video files, no model download, and no
-network access. Every subprocess call (`ffmpeg`/`ffprobe`/`qlmanage`/`sips`)
-and every `mlx-vlm` call is monkeypatched. Runs in well under a second and is
-safe to run on any machine (no Apple Silicon needed for the unit suite).
+network access. Every subprocess call
+(`ffmpeg`/`ffprobe`/`qlmanage`/`sips`/`exiftool`) and every `mlx-vlm` call is
+monkeypatched. Runs in well under a second and is safe to run on any machine
+(no Apple Silicon needed for the unit suite).
 This is also what a plain `uv run pytest`
 effectively reduces to as long as `tests/fixtures/footage/` is empty, since
 the integration tests auto-skip in that case -- but the command above is the
@@ -408,11 +498,13 @@ uv run pytest -m integration
 ```
 
 This exercises the real pipeline end-to-end: actual `ffmpeg`/`qlmanage`
-frame extraction and actual `mlx-vlm` inference against whatever's in
+frame extraction, actual `mlx-vlm` inference, and (for the metadata-embedding
+tests specifically) actual `exiftool` reads/writes, all against whatever's in
 `tests/fixtures/footage/` (triggering the one-time model download on first
 run -- see "Model weights," above). If that directory is empty, these tests
 report as `skipped` rather than failing, so an empty checkout or a
-non-Apple-Silicon machine won't break anything.
+non-Apple-Silicon machine won't break anything; the metadata-embedding tests
+additionally skip if `exiftool` isn't on `PATH`.
 
 **To run everything** (unit tests, plus integration tests if fixtures are
 present):
@@ -453,9 +545,9 @@ wants to know why something works the way it does before changing it.
 `mlx-vlm` only runs on Apple Silicon, and ProRes RAW decoding depends on
 macOS-only frameworks (`qlmanage`/AVFoundation). Preflight checks fail fast
 with one specific message per problem (wrong OS, wrong CPU, missing
-`ffmpeg`/`ffprobe`/`qlmanage`/`sips`), all reported together in one pass,
-rather than surfacing a cryptic import error or a `subprocess` failure
-halfway through a batch.
+`ffmpeg`/`ffprobe`/`qlmanage`/`sips`/`exiftool`), all reported together in
+one pass, rather than surfacing a cryptic import error or a `subprocess`
+failure halfway through a batch.
 
 **Input validation runs before pairing.** The resolved input set is probed
 once per file with `ffprobe` (container read only, no decode) and anything
@@ -540,6 +632,31 @@ matching APFS's per-path-component limit) counts *characters*, not the
 UTF-8 *bytes* APFS actually limits on -- a known, accepted caveat for
 multi-byte captions/locations, not yet worth the complexity of byte-aware
 truncation.
+
+**Metadata embedding (`--add-metadata`) writes the caption as real
+QuickTime/XMP metadata, not just the filename** -- Title/Description/
+Keywords across all three metadata containers (classic `ItemList` atoms,
+the `com.apple.quicktime.*` `Keys` mechanism, XMP), plus a
+`com.slate.*`-namespaced provenance record, via `exiftool`
+(`-overwrite_original`, never `-all=`, so vendor-proprietary tracks and
+genuine camera fields stay untouched regardless of manufacturer). Exact
+tag syntax was empirically verified against real `exiftool`, not just
+inferred from docs -- a bare `-Title=` lands in `ItemList`, reaching `Keys`
+needs the explicit prefix, and only `XMP-dc:Subject` is a true list (the
+other two Keywords fields are comma-joined strings). A pre-write
+read-before-write check preserves any pre-existing Title/Description/
+Keywords into `com.slate.original-*` before overwriting. Off by default
+everywhere; a standalone `--metadata-backfill` mode retrofits this onto
+files a past run already renamed. See "Metadata Embedding" in
+`PROJECT_SPEC.md` for the full design.
+
+**`--verbose`/`-v` surfaces what `--add-metadata` is about to write, inline
+in the terminal** -- a one-time legend (the Title/Description/Keywords →
+`ItemList`/`Keys`(`com.apple.quicktime.*`)/`XMP-dc` mapping, which never
+changes run to run) followed by each group's/file's actual short caption,
+Title, Description, and Keywords values, right where they'd otherwise only
+be visible by opening `rename_mappings.json` or running `exiftool`
+afterward. A no-op without `--add-metadata`.
 
 **Two-phase workflow (`--dry-run` then `--rename-only`), plus a combined
 `--process-and-rename`.** The slow/expensive step (decode + inference) is

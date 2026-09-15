@@ -1,6 +1,8 @@
 from pathlib import Path
 
+import slate.rename as rename
 from slate.mappings import MappingEntry
+from slate.metadata import EmbedOutcome
 from slate.rename import (
     RenameLogEntry,
     build_rename_plan,
@@ -147,6 +149,180 @@ class TestPerformRenames:
         perform_renames(plan, [], on_rename=lambda e: seen.append(e.old_path.name))
         assert seen == ["a.MOV", "a.MP4"]
 
+    def test_embed_metadata_flag_false_never_touches_metadata_module(
+        self, tmp_path, monkeypatch
+    ):
+        # Regression guard: a plain rename batch must stay byte-identical
+        # in behavior -- embed_metadata_flag defaults to False and must
+        # never call into metadata.py at all.
+        def boom(*a, **k):
+            raise AssertionError("embed_metadata should not have been called")
+
+        monkeypatch.setattr(rename, "embed_metadata", boom)
+        touch(tmp_path / "a.MOV")
+        entries = [
+            MappingEntry(
+                status="ok",
+                original_files=["a.MOV"],
+                new_stem="a caption",
+                long_caption="A caption.",
+                keywords=["a"],
+            )
+        ]
+        plan = build_rename_plan(entries, tmp_path)
+        log: list[RenameLogEntry] = []
+        perform_renames(plan, log)
+        assert log[0].metadata_embedded is False
+
+    def test_embed_metadata_success_sets_flag_and_fires_on_metadata(
+        self, tmp_path, monkeypatch
+    ):
+        outcome = EmbedOutcome(embedded=True, preserved_fields=[])
+        monkeypatch.setattr(rename, "embed_metadata", lambda *a, **k: outcome)
+        touch(tmp_path / "a.MOV")
+        entries = [
+            MappingEntry(
+                status="ok",
+                original_files=["a.MOV"],
+                new_stem="a caption",
+                long_caption="A caption.",
+                keywords=["a"],
+            )
+        ]
+        plan = build_rename_plan(entries, tmp_path)
+        log: list[RenameLogEntry] = []
+        seen = []
+        perform_renames(
+            plan,
+            log,
+            embed_metadata_flag=True,
+            on_metadata=lambda path, o: seen.append((path.name, o)),
+        )
+        assert log[0].metadata_embedded is True
+        assert seen == [("a caption.MOV", outcome)]
+
+    def test_embed_metadata_forwards_entry_fields_and_provenance_args(
+        self, tmp_path, monkeypatch
+    ):
+        calls = []
+
+        def fake_embed(path, **kwargs):
+            calls.append((path, kwargs))
+            return EmbedOutcome(embedded=True)
+
+        monkeypatch.setattr(rename, "embed_metadata", fake_embed)
+        touch(tmp_path / "a.MOV")
+        entries = [
+            MappingEntry(
+                status="ok",
+                original_files=["a.MOV"],
+                new_stem="a caption",
+                long_caption="A long caption.",
+                keywords=["a", "b"],
+                captioned_at="2026-09-14T18:32:07Z",
+            )
+        ]
+        plan = build_rename_plan(entries, tmp_path)
+        perform_renames(
+            plan,
+            [],
+            embed_metadata_flag=True,
+            app_version="0.2.2",
+            caption_model="some/model",
+        )
+        path, kwargs = calls[0]
+        assert path.name == "a caption.MOV"
+        assert kwargs["title"] == "a caption"
+        assert kwargs["description"] == "A long caption."
+        assert kwargs["keywords"] == ["a", "b"]
+        assert kwargs["original_filename"] == "a.MOV"
+        assert kwargs["app_version"] == "0.2.2"
+        assert kwargs["caption_model"] == "some/model"
+        assert kwargs["generated_at"] == "2026-09-14T18:32:07Z"
+
+    def test_generated_at_comes_from_each_entrys_captioned_at(
+        self, tmp_path, monkeypatch
+    ):
+        # Not a batch-wide timestamp -- different entries in the same batch
+        # can have been captioned at different times (some freshly, some
+        # carried over from an earlier run).
+        calls = []
+
+        def fake_embed(path, **kwargs):
+            calls.append(kwargs["generated_at"])
+            return EmbedOutcome(embedded=True)
+
+        monkeypatch.setattr(rename, "embed_metadata", fake_embed)
+        touch(tmp_path / "a.MOV")
+        touch(tmp_path / "b.MOV")
+        entries = [
+            MappingEntry(
+                status="ok",
+                original_files=["a.MOV"],
+                new_stem="a caption",
+                long_caption="A caption.",
+                keywords=["a"],
+                captioned_at="2026-01-01T00:00:00Z",
+            ),
+            MappingEntry(
+                status="ok",
+                original_files=["b.MOV"],
+                new_stem="b caption",
+                long_caption="B caption.",
+                keywords=["b"],
+                captioned_at="2026-09-14T18:32:07Z",
+            ),
+        ]
+        plan = build_rename_plan(entries, tmp_path)
+        perform_renames(plan, [], embed_metadata_flag=True)
+        assert sorted(calls) == ["2026-01-01T00:00:00Z", "2026-09-14T18:32:07Z"]
+
+    def test_missing_long_caption_or_keywords_skips_embed_and_fires_none(
+        self, tmp_path, monkeypatch
+    ):
+        def boom(*a, **k):
+            raise AssertionError("embed_metadata should not have been called")
+
+        monkeypatch.setattr(rename, "embed_metadata", boom)
+        touch(tmp_path / "a.MOV")
+        entries = [
+            MappingEntry(status="ok", original_files=["a.MOV"], new_stem="a caption")
+        ]
+        plan = build_rename_plan(entries, tmp_path)
+        log: list[RenameLogEntry] = []
+        seen = []
+        perform_renames(
+            plan,
+            log,
+            embed_metadata_flag=True,
+            on_metadata=lambda path, o: seen.append(o),
+        )
+        assert log[0].metadata_embedded is False
+        assert seen == [None]
+
+    def test_embed_metadata_runs_for_each_file_in_a_pair(self, tmp_path, monkeypatch):
+        seen = []
+
+        def fake_embed(path, **kwargs):
+            seen.append(path.name)
+            return EmbedOutcome(embedded=True)
+
+        monkeypatch.setattr(rename, "embed_metadata", fake_embed)
+        touch(tmp_path / "a.MOV")
+        touch(tmp_path / "a.MP4")
+        entries = [
+            MappingEntry(
+                status="ok",
+                original_files=["a.MOV", "a.MP4"],
+                new_stem="a caption",
+                long_caption="A caption.",
+                keywords=["a"],
+            )
+        ]
+        plan = build_rename_plan(entries, tmp_path)
+        perform_renames(plan, [], embed_metadata_flag=True)
+        assert sorted(seen) == ["a caption.MOV", "a caption.MP4"]
+
 
 class TestWriteAuditTrail:
     def test_renames_mappings_file_to_applied_name(self, tmp_path):
@@ -209,3 +385,69 @@ class TestWriteUndoScript:
         write_undo_script(log, script_path)
         content = script_path.read_text()
         assert content.count("mv -n --") == 1
+
+    def test_zero_metadata_embedded_entries_produce_no_exiftool_lines(self, tmp_path):
+        # Regression guard: a batch with no embedded metadata must produce
+        # byte-identical output to today -- no guard line, no exiftool call.
+        log = [
+            RenameLogEntry(
+                old_path=tmp_path / "a.MOV",
+                new_path=tmp_path / "a caption.MOV",
+                metadata_embedded=False,
+            )
+        ]
+        script_path = tmp_path / "undo.sh"
+        write_undo_script(log, script_path)
+        content = script_path.read_text()
+        assert "exiftool" not in content
+
+    def test_metadata_embedded_entry_gets_title_reset_after_its_mv_line(self, tmp_path):
+        old_path = tmp_path / "a.MOV"
+        new_path = tmp_path / "a caption.MOV"
+        log = [
+            RenameLogEntry(old_path=old_path, new_path=new_path, metadata_embedded=True)
+        ]
+        script_path = tmp_path / "undo.sh"
+        write_undo_script(log, script_path)
+        lines = script_path.read_text().splitlines()
+
+        mv_index = next(i for i, line in enumerate(lines) if line.startswith("mv -n"))
+        exiftool_index = mv_index + 1
+        assert lines[exiftool_index].startswith("exiftool -overwrite_original")
+        assert "-ItemList:Title=a.MOV" not in lines[exiftool_index]  # stem, not name
+        assert "-ItemList:Title=a" in lines[exiftool_index]
+        assert "-Keys:Title=a" in lines[exiftool_index]
+        assert "-XMP-dc:Title=a" in lines[exiftool_index]
+
+    def test_metadata_embedded_entry_triggers_exiftool_presence_guard(self, tmp_path):
+        log = [
+            RenameLogEntry(
+                old_path=tmp_path / "a.MOV",
+                new_path=tmp_path / "a caption.MOV",
+                metadata_embedded=True,
+            )
+        ]
+        script_path = tmp_path / "undo.sh"
+        write_undo_script(log, script_path)
+        content = script_path.read_text()
+        assert content.count("command -v exiftool") == 1
+        assert "brew install exiftool" in content
+
+    def test_mixed_batch_only_embedded_entries_get_exiftool_lines(self, tmp_path):
+        log = [
+            RenameLogEntry(
+                old_path=tmp_path / "a.MOV",
+                new_path=tmp_path / "a caption.MOV",
+                metadata_embedded=True,
+            ),
+            RenameLogEntry(
+                old_path=tmp_path / "b.MOV",
+                new_path=tmp_path / "b caption.MOV",
+                metadata_embedded=False,
+            ),
+        ]
+        script_path = tmp_path / "undo.sh"
+        write_undo_script(log, script_path)
+        content = script_path.read_text()
+        assert content.count("mv -n --") == 2
+        assert content.count("exiftool -overwrite_original") == 1

@@ -8,7 +8,7 @@ def make_which(available: set[str]):
     return lambda name: f"/usr/bin/{name}" if name in available else None
 
 
-ALL_TOOLS = {"ffmpeg", "ffprobe", "qlmanage", "sips"}
+ALL_TOOLS = {"ffmpeg", "ffprobe", "qlmanage", "sips", "exiftool"}
 
 
 class TestRunPreflightChecks:
@@ -60,9 +60,16 @@ class TestRunPreflightChecks:
         failures = run_preflight_checks()
         assert any("sips" in f for f in failures)
 
+    def test_missing_exiftool_reports_failure_with_brew_hint(self, monkeypatch):
+        monkeypatch.setattr(platform, "system", lambda: "Darwin")
+        monkeypatch.setattr(platform, "machine", lambda: "arm64")
+        monkeypatch.setattr(shutil, "which", make_which(ALL_TOOLS - {"exiftool"}))
+        failures = run_preflight_checks()
+        assert any("exiftool" in f and "brew install" in f for f in failures)
+
     def test_all_failures_reported_together_not_fail_fast(self, monkeypatch):
         monkeypatch.setattr(platform, "system", lambda: "Linux")
         monkeypatch.setattr(platform, "machine", lambda: "x86_64")
         monkeypatch.setattr(shutil, "which", make_which(set()))
         failures = run_preflight_checks()
-        assert len(failures) == 6
+        assert len(failures) == 7

@@ -3,12 +3,16 @@ import json
 from slate.mappings import (
     APP_VERSION,
     MappingEntry,
+    MetadataChangeEntry,
     disambiguate,
     find_existing_match,
+    find_existing_metadata_change,
     load_mappings,
+    load_metadata_changes,
     major_version_mismatch,
     read_app_version,
     save_mappings,
+    save_metadata_changes,
     sort_key,
 )
 
@@ -42,6 +46,37 @@ class TestMappingEntryDictConversion:
         assert "preview_jpeg" not in d
         assert "preview_jpeg_sha256" not in d
         assert "source_used_for_caption" not in d
+        assert "short_caption" not in d
+        assert "long_caption" not in d
+        assert "keywords" not in d
+        assert "captioned_at" not in d
+
+    def test_ok_entry_round_trip_with_metadata_fields(self):
+        entry = MappingEntry(
+            status="ok",
+            original_files=["a.MOV", "a.MP4"],
+            new_stem="a caption",
+            preview_jpeg="a caption.jpg",
+            preview_jpeg_sha256="deadbeef",
+            source_used_for_caption="a.MP4",
+            short_caption="a caption",
+            long_caption="A red kayak drifts across a calm lake at sunset.",
+            keywords=["kayak", "lake", "sunset"],
+            captioned_at="2026-09-14T18:32:07Z",
+            short_caption_locked=True,
+        )
+        assert MappingEntry.from_dict(entry.to_dict()) == entry
+
+    def test_ok_entry_without_metadata_fields_still_round_trips(self):
+        # Backward compat: a pre-existing rename_mappings.json (from before
+        # --add-metadata existed, or a plain --dry-run run) has no
+        # short_caption/long_caption/keywords/captioned_at/
+        # short_caption_locked keys at all.
+        entry = MappingEntry(status="ok", original_files=["a.MOV"], new_stem="a")
+        d = entry.to_dict()
+        del d["short_caption"], d["long_caption"], d["keywords"], d["captioned_at"]
+        del d["short_caption_locked"]
+        assert MappingEntry.from_dict(d) == entry
 
 
 class TestLoadSaveMappings:
@@ -214,3 +249,83 @@ class TestDisambiguate:
         # the limit is 21 (one under) -- base must shrink by 1, suffix intact.
         assert e1.new_stem.endswith("_2")
         assert len(e1.new_stem) == 21
+
+
+class TestMetadataChangeEntryDictConversion:
+    def test_ok_entry_round_trip(self):
+        entry = MetadataChangeEntry(
+            status="ok",
+            current_files=["a.MOV", "a.MP4"],
+            title="a caption",
+            long_caption="A red kayak drifts across a calm lake at sunset.",
+            keywords=["kayak", "lake", "sunset"],
+            preview_jpeg="a caption.jpg",
+            source_used_for_caption="a.MP4",
+            captioned_at="2026-09-14T18:32:07Z",
+        )
+        assert MetadataChangeEntry.from_dict(entry.to_dict()) == entry
+
+    def test_error_entry_round_trip(self):
+        entry = MetadataChangeEntry(
+            status="error", current_files=["b.MOV"], error="decode failed"
+        )
+        assert MetadataChangeEntry.from_dict(entry.to_dict()) == entry
+
+    def test_ok_entry_dict_omits_error_key(self):
+        entry = MetadataChangeEntry(status="ok", current_files=["a.MOV"], title="a")
+        assert "error" not in entry.to_dict()
+
+    def test_error_entry_dict_omits_ok_only_keys(self):
+        entry = MetadataChangeEntry(
+            status="error", current_files=["a.MOV"], error="boom"
+        )
+        d = entry.to_dict()
+        assert "title" not in d
+        assert "long_caption" not in d
+        assert "keywords" not in d
+        assert "preview_jpeg" not in d
+        assert "source_used_for_caption" not in d
+
+
+class TestLoadSaveMetadataChanges:
+    def test_missing_file_returns_empty_list(self, tmp_path):
+        assert load_metadata_changes(tmp_path / "nonexistent.json") == []
+
+    def test_round_trip(self, tmp_path):
+        path = tmp_path / "metadata_changes.json"
+        entries = [
+            MetadataChangeEntry(
+                status="ok",
+                current_files=["a.MOV", "a.MP4"],
+                title="a caption",
+                long_caption="A red kayak drifts across a calm lake at sunset.",
+                keywords=["kayak", "lake", "sunset"],
+            ),
+            MetadataChangeEntry(status="error", current_files=["b.MOV"], error="boom"),
+        ]
+        save_metadata_changes(path, entries)
+        assert load_metadata_changes(path) == entries
+
+    def test_save_stamps_current_app_version_and_wraps_groups(self, tmp_path):
+        path = tmp_path / "metadata_changes.json"
+        entries = [MetadataChangeEntry(status="ok", current_files=["a.MOV"], title="a")]
+        save_metadata_changes(path, entries)
+        data = json.loads(path.read_text())
+        assert data["app_version"] == APP_VERSION
+        assert data["groups"][0]["title"] == "a"
+
+
+class TestFindExistingMetadataChange:
+    def test_matches_regardless_of_order(self):
+        existing = [
+            MetadataChangeEntry(
+                status="ok", current_files=["a.MOV", "a.MP4"], title="x"
+            )
+        ]
+        assert find_existing_metadata_change(existing, ["a.MP4", "a.MOV"]) is not None
+
+    def test_no_match_returns_none(self):
+        existing = [
+            MetadataChangeEntry(status="ok", current_files=["a.MOV"], title="x")
+        ]
+        assert find_existing_metadata_change(existing, ["b.MOV"]) is None

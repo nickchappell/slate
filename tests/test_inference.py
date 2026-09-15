@@ -2,6 +2,7 @@ import pytest
 from huggingface_hub.errors import LocalEntryNotFoundError
 
 import slate.inference as inference
+from slate.inference import CaptionSections, parse_caption_sections
 
 
 class FakeGenerationResult:
@@ -59,6 +60,22 @@ class TestGenerateCaption:
         assert calls["prompt"] == "templated:describe this"
         assert calls["image"] == ["/tmp/frame.jpg"]
         assert calls["kwargs"]["max_tokens"] == inference.MAX_CAPTION_TOKENS
+
+    def test_explicit_max_tokens_is_forwarded_to_generate(self, monkeypatch):
+        calls = {}
+        _patch_generation_chain(monkeypatch)
+
+        def fake_generate(model, processor, prompt, image, **kwargs):
+            calls["kwargs"] = kwargs
+            return FakeGenerationResult("x")
+
+        monkeypatch.setattr(inference, "vlm_generate", fake_generate)
+
+        inference.generate_caption(
+            ["/tmp/frame.jpg"], "prompt", "some/model", max_tokens=140
+        )
+
+        assert calls["kwargs"]["max_tokens"] == 140
 
     def test_passes_num_images_matching_frame_count(self, monkeypatch):
         _patch_generation_chain(monkeypatch)
@@ -200,3 +217,139 @@ class TestCheckForModelUpdates:
 
         assert updated is True
         assert path == "/new/path"
+
+
+class TestParseCaptionSections:
+    def test_well_formed_three_section_response(self):
+        raw = (
+            "SHORT: red kayak at sunset\n"
+            "LONG: A red kayak drifts across a calm lake at sunset.\n"
+            "KEYWORDS: kayak, lake, sunset, red, calm"
+        )
+        result = parse_caption_sections(raw)
+        assert result == CaptionSections(
+            short="red kayak at sunset",
+            long="A red kayak drifts across a calm lake at sunset.",
+            keywords=["kayak", "lake", "sunset", "red", "calm"],
+        )
+
+    def test_per_keyword_quotes_are_stripped(self):
+        # The model sometimes wraps each keyword in its own quote marks
+        # even though the prompt asks for a bare comma list -- see the
+        # real-world example this was reported against.
+        raw = (
+            "SHORT: train in urban setting\n"
+            "LONG: A train is parked in an urban setting.\n"
+            'KEYWORDS: "train", "urban setting", "graffiti", "flag"'
+        )
+        result = parse_caption_sections(raw)
+        assert result.keywords == ["train", "urban setting", "graffiti", "flag"]
+
+    def test_missing_keywords_falls_back_to_derivation_from_long(self):
+        raw = "SHORT: red kayak\nLONG: A red kayak drifts across a calm lake."
+        result = parse_caption_sections(raw)
+        assert result.short == "red kayak"
+        assert result.long == "A red kayak drifts across a calm lake."
+        # Fallback-derived, not None -- see _derive_keywords_from_long.
+        assert result.keywords == ["red", "kayak", "drifts", "calm", "lake"]
+
+    def test_malformed_keywords_falls_back_to_derivation(self):
+        # A full sentence instead of a comma list -- the "most likely to
+        # break format" case the spec calls out.
+        raw = (
+            "SHORT: red kayak\n"
+            "LONG: A red kayak drifts across a calm lake.\n"
+            "KEYWORDS: There are many things happening in this scene."
+        )
+        result = parse_caption_sections(raw)
+        assert result.keywords == ["red", "kayak", "drifts", "calm", "lake"]
+
+    def test_two_section_response_has_no_short(self):
+        # The --metadata-backfill prompt omits SHORT entirely.
+        raw = (
+            "LONG: Seagulls squabble over a dropped fry.\n"
+            "KEYWORDS: seagulls, fry, birds"
+        )
+        result = parse_caption_sections(raw)
+        assert result.short is None
+        assert result.long == "Seagulls squabble over a dropped fry."
+        assert result.keywords == ["seagulls", "fry", "birds"]
+
+    def test_markers_out_of_order_still_parse(self):
+        raw = (
+            "KEYWORDS: kayak, sunset\n"
+            "SHORT: red kayak\n"
+            "LONG: A red kayak drifts across a calm lake."
+        )
+        result = parse_caption_sections(raw)
+        assert result.short == "red kayak"
+        assert result.long == "A red kayak drifts across a calm lake."
+        assert result.keywords == ["kayak", "sunset"]
+
+    def test_garbage_input_degrades_gracefully(self):
+        result = parse_caption_sections("completely unstructured text, no markers")
+        assert result == CaptionSections(short=None, long=None, keywords=None)
+
+    def test_empty_input_degrades_gracefully(self):
+        result = parse_caption_sections("")
+        assert result == CaptionSections(short=None, long=None, keywords=None)
+
+
+class TestCleanKeyword:
+    def test_strips_surrounding_double_quotes(self):
+        assert inference._clean_keyword('"train"') == "train"
+
+    def test_strips_surrounding_single_quotes(self):
+        assert inference._clean_keyword("'urban setting'") == "urban setting"
+
+    def test_strips_whitespace_around_quotes(self):
+        assert inference._clean_keyword('  "train"  ') == "train"
+
+    def test_strips_whitespace_inside_quotes(self):
+        assert inference._clean_keyword('" train "') == "train"
+
+    def test_leaves_unquoted_keyword_unchanged(self):
+        assert inference._clean_keyword("train") == "train"
+
+    def test_does_not_strip_mismatched_quotes(self):
+        assert inference._clean_keyword("'train\"") == "'train\""
+
+    def test_lone_quote_character_is_not_stripped_to_empty(self):
+        # len < 2, so the "surrounding pair" check can't apply.
+        assert inference._clean_keyword('"') == '"'
+
+
+class TestDeriveKeywordsFromLong:
+    def test_drops_stopwords(self):
+        keywords = inference._derive_keywords_from_long(
+            "A red kayak drifts across the calm lake"
+        )
+        assert "a" not in keywords
+        assert "the" not in keywords
+        assert "across" not in keywords
+        assert "red" in keywords
+        assert "kayak" in keywords
+
+    def test_dedupes_preserving_first_occurrence_order(self):
+        keywords = inference._derive_keywords_from_long("lake lake kayak lake")
+        assert keywords == ["lake", "kayak"]
+
+    def test_caps_at_max_keywords(self):
+        words = " ".join(f"word{i}" for i in range(20))
+        keywords = inference._derive_keywords_from_long(words, max_keywords=5)
+        assert len(keywords) == 5
+
+    def test_lowercases_and_strips_punctuation(self):
+        keywords = inference._derive_keywords_from_long("Kayak, Lake! Sunset.")
+        assert keywords == ["kayak", "lake", "sunset"]
+
+    def test_cannot_invent_words_not_literally_in_the_text(self):
+        # Deliberate limitation the spec calls out: the model asked directly
+        # can name concepts it saw but never wrote (e.g. "recreation"), but
+        # a mechanical word-strip of the caption text can never recover
+        # anything not literally present in it.
+        keywords = inference._derive_keywords_from_long(
+            "A person paddles a small boat on the water"
+        )
+        assert "recreation" not in keywords
+        assert "watercraft" not in keywords

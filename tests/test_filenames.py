@@ -1,4 +1,9 @@
-from slate.filenames import assemble_stem, normalize_caption, truncate_caption
+from slate.filenames import (
+    assemble_stem,
+    normalize_caption,
+    normalize_long_caption,
+    truncate_caption,
+)
 
 
 class TestNormalizeCaption:
@@ -57,6 +62,35 @@ class TestNormalizeCaption:
         # (rather than a matching closing quote) means the leading quote is
         # left in place, since '"' != '.' at the point that check runs.
         assert normalize_caption('"waves crashing.') == '"waves crashing'
+
+
+class TestNormalizeLongCaption:
+    def test_collapses_whitespace_and_newlines(self):
+        assert (
+            normalize_long_caption("  A red kayak   drifts\nacross a lake.  ")
+            == "A red kayak drifts across a lake."
+        )
+
+    def test_replaces_slash_and_nul_with_space(self):
+        assert (
+            normalize_long_caption("before/after shot\0here")
+            == "before after shot here"
+        )
+
+    def test_strips_surrounding_quotes(self):
+        assert (
+            normalize_long_caption('"A red kayak drifts across a lake."')
+            == "A red kayak drifts across a lake."
+        )
+
+    def test_does_not_lowercase(self):
+        assert normalize_long_caption("A Red Kayak") == "A Red Kayak"
+
+    def test_does_not_strip_trailing_period(self):
+        assert (
+            normalize_long_caption("A red kayak drifts across a lake.")
+            == "A red kayak drifts across a lake."
+        )
 
 
 class TestTruncateCaption:
