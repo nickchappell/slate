@@ -89,6 +89,14 @@ slate --input-dir ~/Movies/Footage --process-and-rename
   ```bash
   brew install exiftool
   ```
+- **`bento4`** on `PATH` -- *optional*, not checked at startup and not
+  required for `--add-metadata` to work. Only used to repair a timed
+  metadata track that a rare `exiftool`-write fallback would otherwise
+  leave mislabeled (see "Embedding Metadata" below); everything else works
+  the same without it. Install via Homebrew:
+  ```bash
+  brew install bento4
+  ```
 - **[`uv`](https://docs.astral.sh/uv/)** for installing/running the tool.
 - **`make`** -- only needed for development (running the `Makefile` targets:
   tests, lint, formatting, releases); not required to install or run
@@ -299,6 +307,15 @@ before being overwritten, never silently lost. Undoing a rename
 (`undo_renames_<timestamp>.sh`) resets the embedded Title back too, so it
 never drifts from the reverted filename; Description/Keywords are left as
 embedded, since they describe the clip's content, not its name.
+
+On a small number of vendor-written files (seen so far on Lux Optics
+"Kino" recordings) the metadata write hits a real bug in `exiftool` and
+would otherwise fail outright; `slate` detects this and transparently
+falls back to an `ffmpeg`-based remux instead, with no different flags or
+behavior required on your part. If `bento4` is also installed (see
+Prerequisites above), that fallback additionally repairs a timed
+metadata track it would otherwise mislabel -- entirely optional, and
+everything else about `--add-metadata` works identically without it.
 
 Add `--verbose`/`-v` to see exactly what's being written, without having to
 open `rename_mappings.json` or run `exiftool` yourself:
@@ -647,8 +664,14 @@ other two Keywords fields are comma-joined strings). A pre-write
 read-before-write check preserves any pre-existing Title/Description/
 Keywords into `com.slate.original-*` before overwriting. Off by default
 everywhere; a standalone `--metadata-backfill` mode retrofits this onto
-files a past run already renamed. See "Metadata Embedding" in
-`PROJECT_SPEC.md` for the full design.
+files a past run already renamed. On certain vendor-written files (seen so
+far on Lux Optics "Kino" recordings, not on every iPhone ProRes file --
+see `spec/metadata-write-corruption.md`) the `exiftool` write hits a real
+exiftool bug and fails outright; `slate` transparently falls back to an
+`ffmpeg`-based remux for the `Keys`/`mdta` tag family, and (if `bento4` is
+installed) repairs a timed-metadata track that remux would otherwise
+mislabel. See "Metadata Embedding" in `PROJECT_SPEC.md` for the full
+design.
 
 **`--verbose`/`-v` surfaces what `--add-metadata` is about to write, inline
 in the terminal** -- a one-time legend (the Title/Description/Keywords →

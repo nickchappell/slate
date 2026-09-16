@@ -147,7 +147,14 @@ Module layout under `src/slate/`:
   `com.slate.*` provenance, with a read-before-write collision check that
   preserves any pre-existing values into `com.slate.original-*`. Tag
   syntax is empirically verified against real `exiftool`, not just docs —
-  see "Metadata Embedding" in `PROJECT_SPEC.md`
+  see "Metadata Embedding" in `PROJECT_SPEC.md`. On certain vendor-written
+  files (confirmed on Lux Optics "Kino" recordings; a second app on the
+  same phone/codec doesn't trigger it) that write fails on a real exiftool
+  bug and falls back to an `ffmpeg` remux owning the entire `Keys`/`mdta`
+  family, followed by a Bento4-based (`mp4extract`/`mp4edit`, optional —
+  `brew install bento4`, not preflight-checked) repair of a timed
+  metadata track that remux would otherwise mislabel — see
+  `spec/metadata-write-corruption.md` for the full investigation
 - `output.py` — centralized `rich`-based colorized console output
 - `pairing.py` — MOV/MP4 pairing: verifies same-stem files via `ffprobe`
   duration/frame-count before trusting either as a stand-in for the other;
@@ -234,9 +241,17 @@ with a composited left-to-right strip as the review-only preview JPEG —
 landed; see "Frame Extraction Strategy" in `PROJECT_SPEC.md`. Metadata
 embedding — `--add-metadata`/`--metadata-backfill`, writing the caption as
 real QuickTime/XMP Title/Description/Keywords via `exiftool`, not just the
-filename — also landed; see "Metadata Embedding" in `PROJECT_SPEC.md`.
-Two items from that design remain genuinely open, not yet empirically
-confirmed: `MAX_CAPTION_TOKENS_WITH_METADATA`'s value (a reasoned
-estimate, not measured) and the `com.apple.quicktime.*`/XMP write-time
-benchmark against a large real ProRes RAW file — both need real fixture
-footage in `tests/fixtures/footage/`, still empty as of this writing.)
+filename — also landed; see "Metadata Embedding" in `PROJECT_SPEC.md`. The
+`exiftool`-write-failure fallback (an `ffmpeg` remux for `Keys`/`mdta` on
+files that hit a real exiftool bug, plus a Bento4-based repair of a timed
+metadata track that remux otherwise mislabels) has also landed; see
+`metadata.py`'s entry above and `spec/metadata-write-corruption.md` for
+the full investigation. Two items from the original metadata-embedding
+design remain genuinely open, not yet empirically confirmed:
+`MAX_CAPTION_TOKENS_WITH_METADATA`'s value (a reasoned estimate, not
+measured) and the `com.apple.quicktime.*`/XMP write-time benchmark against
+a large real ProRes RAW file. `tests/fixtures/footage/` is no longer
+empty — two real iPhone 17 Pro ProRes fixtures now live there (a Kino and
+a Moment Pro recording, used for the exiftool-fallback investigation
+above) — but neither of these two specific measurements has been taken
+against them yet.)

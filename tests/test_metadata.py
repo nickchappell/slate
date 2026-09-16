@@ -1,5 +1,6 @@
 import json
 import subprocess
+from pathlib import Path
 
 from slate.metadata import (
     EmbedOutcome,
@@ -7,6 +8,8 @@ from slate.metadata import (
     embed_metadata,
     read_existing_metadata,
 )
+
+TERMINATOR_ERROR = "Error: [minor] Terminator found in Meta with 478 bytes remaining"
 
 
 class FakeCompletedProcess:
@@ -308,3 +311,378 @@ class TestEmbedMetadata:
         target = tmp_path / "clip.mov"
         self._embed(target, monkeypatch, cmds)
         assert cmds[-1][-1] == str(target)
+
+
+class TestEmbedMetadataFfmpegKeysFamilySplit:
+    """Covers the "Terminator found in Meta" atom-family split -- see
+    spec/metadata-write-corruption.md's "Follow-up: two-pass ffmpeg +
+    exiftool" section. An earlier version of this fix retried the exact
+    same combined exiftool write after a structural-only ffmpeg repair;
+    that was found (via a real fixture + ffprobe, not just exiftool reads)
+    to silently concatenate slate's new values into the vendor's
+    com.apple.quicktime.* tags, because exiftool appending new Keys
+    entries onto a Keys/mdta atom it didn't build lands on existing
+    low-numbered vendor slots instead of fresh ones. The fix here is an
+    ownership split, not a retry: ffmpeg (_ffmpeg_write_keys_family) is
+    the only writer of the entire Keys/mdta family (repair + new values +
+    provenance, all via fully-qualified -metadata keys), and a second,
+    narrower exiftool call -- never touching -Keys: -- handles only
+    ItemList/XMP-dc afterward.
+
+    fake_run distinguishes exiftool's three possible invocations by argv
+    shape: -j is the pre-write read, -config only appears on the first
+    (combined, all-families) write attempt, and its absence marks the
+    second (ItemList/XMP-dc-only) write. ffmpeg fakes the repair by
+    writing bytes to its output path (the last argv element), mirroring
+    how the real function swaps the file in via Path.replace().
+
+    mebx_repair (None by default) fakes Bento4's mp4dump/mp4extract/
+    mp4edit for _repair_mislabeled_data_tracks -- see "Follow-up: fixing
+    the mebx mislabeling with Bento4" in spec/metadata-write-corruption.md.
+    None mirrors Bento4 not being installed (mp4dump exits non-zero, the
+    repair silently no-ops); passing a dict with 'original_fourccs' /
+    'remuxed_fourccs' (parallel lists, one entry per trak) fakes the two
+    mp4dump calls _repair_mislabeled_data_tracks makes, in that order."""
+
+    def _make_fake_run(
+        self,
+        *,
+        combined_write_error: str = "",
+        ffmpeg_ok: bool = True,
+        itemlist_write_error: str = "",
+        read_json: object = None,
+        mebx_repair: dict | None = None,
+    ):
+        calls: list[list[str]] = []
+        mp4dump_calls: list[int] = []
+
+        def _mp4dump_json(fourccs: list[str | None]) -> str:
+            return json.dumps(
+                [
+                    {
+                        "name": "moov",
+                        "children": [
+                            {
+                                "name": "trak",
+                                "children": [
+                                    {
+                                        "name": "mdia",
+                                        "children": [
+                                            {
+                                                "name": "minf",
+                                                "children": [
+                                                    {
+                                                        "name": "stbl",
+                                                        "children": [
+                                                            {
+                                                                "name": "stsd",
+                                                                "children": (
+                                                                    [{"name": fc}]
+                                                                    if fc
+                                                                    else []
+                                                                ),
+                                                            }
+                                                        ],
+                                                    }
+                                                ],
+                                            }
+                                        ],
+                                    }
+                                ],
+                            }
+                            for fc in fourccs
+                        ],
+                    }
+                ]
+            )
+
+        def fake_run(cmd, capture_output=True, timeout=None, text=False, **kwargs):
+            calls.append(cmd)
+
+            if cmd[0] == "exiftool" and "-j" in cmd:
+                return FakeCompletedProcess(0, stdout=json.dumps([read_json or {}]))
+
+            if cmd[0] == "exiftool" and "-config" in cmd:
+                if combined_write_error:
+                    return FakeCompletedProcess(1, stderr=combined_write_error)
+                return FakeCompletedProcess(0)
+
+            if cmd[0] == "exiftool":
+                if itemlist_write_error:
+                    return FakeCompletedProcess(1, stderr=itemlist_write_error)
+                return FakeCompletedProcess(0)
+
+            if cmd[0] == "ffmpeg":
+                if not ffmpeg_ok:
+                    return FakeCompletedProcess(1, stderr="ffmpeg: decode error")
+                Path(cmd[-1]).write_bytes(b"repaired bytes")
+                return FakeCompletedProcess(0)
+
+            if cmd[0] == "mp4dump":
+                if mebx_repair is None:
+                    return FakeCompletedProcess(1, stderr="mp4dump: not found")
+                mp4dump_calls.append(1)
+                key = (
+                    "original_fourccs" if len(mp4dump_calls) == 1 else "remuxed_fourccs"
+                )
+                return FakeCompletedProcess(0, stdout=_mp4dump_json(mebx_repair[key]))
+
+            if cmd[0] == "mp4extract":
+                Path(cmd[-1]).write_bytes(b"atom")
+                return FakeCompletedProcess(0)
+
+            if cmd[0] == "mp4edit":
+                if mebx_repair is not None and not mebx_repair.get("mp4edit_ok", True):
+                    return FakeCompletedProcess(1, stderr="mp4edit: failed")
+                Path(cmd[-1]).write_bytes(b"mebx repaired bytes")
+                return FakeCompletedProcess(0)
+
+            raise AssertionError(f"unexpected invocation: {cmd}")
+
+        return fake_run, calls
+
+    def _embed(self, path, monkeypatch, fake_run):
+        monkeypatch.setattr(subprocess, "run", fake_run)
+        return embed_metadata(
+            path,
+            title="A017_C015 red kayak at sunset",
+            description="A red kayak drifts across a calm lake at sunset.",
+            keywords=["kayak", "lake", "sunset"],
+            original_filename="A017_C015_0806GQ.MOV",
+            app_version="0.2.2",
+            caption_model="mlx-community/Qwen2-VL-2B-Instruct-4bit",
+            generated_at="2026-09-14T18:32:07Z",
+        )
+
+    def test_terminator_error_triggers_split_write_and_succeeds(
+        self, tmp_path, monkeypatch
+    ):
+        target = tmp_path / "clip.mov"
+        target.write_bytes(b"original bytes")
+        fake_run, calls = self._make_fake_run(combined_write_error=TERMINATOR_ERROR)
+
+        outcome = self._embed(target, monkeypatch, fake_run)
+
+        assert outcome == EmbedOutcome(embedded=True, preserved_fields=[])
+        assert any(c[0] == "ffmpeg" for c in calls)
+        # ffmpeg's rewritten bytes ended up at the real path -- Path.replace()
+        # swapped them in rather than leaving a stray temp file.
+        assert target.read_bytes() == b"repaired bytes"
+
+    def test_ffmpeg_keys_family_write_uses_fully_qualified_names(
+        self, tmp_path, monkeypatch
+    ):
+        # Regression guard: bare -metadata title=/description=/keywords=
+        # writes a differently-named key that collides with ItemList's own
+        # same-named key on read (shows up joined with ";" to itself).
+        target = tmp_path / "clip.mov"
+        target.write_bytes(b"original bytes")
+        fake_run, calls = self._make_fake_run(combined_write_error=TERMINATOR_ERROR)
+
+        self._embed(target, monkeypatch, fake_run)
+
+        ffmpeg_cmd = next(c for c in calls if c[0] == "ffmpeg")
+        joined = " ".join(ffmpeg_cmd)
+        assert "com.apple.quicktime.title=A017_C015 red kayak at sunset" in joined
+        assert (
+            "com.apple.quicktime.description=A red kayak drifts across a "
+            "calm lake at sunset." in joined
+        )
+        assert "com.apple.quicktime.keywords=kayak, lake, sunset" in joined
+        assert "-metadata title=" not in joined
+        assert "-metadata description=" not in joined
+        assert "-metadata keywords=" not in joined
+
+    def test_ffmpeg_keys_family_write_includes_provenance(self, tmp_path, monkeypatch):
+        target = tmp_path / "clip.mov"
+        target.write_bytes(b"original bytes")
+        fake_run, calls = self._make_fake_run(combined_write_error=TERMINATOR_ERROR)
+
+        self._embed(target, monkeypatch, fake_run)
+
+        ffmpeg_cmd = next(c for c in calls if c[0] == "ffmpeg")
+        joined = " ".join(ffmpeg_cmd)
+        assert "com.slate.original-filename=A017_C015_0806GQ.MOV" in joined
+        assert "com.slate.app-version=0.2.2" in joined
+        assert (
+            "com.slate.caption-model=mlx-community/Qwen2-VL-2B-Instruct-4bit" in joined
+        )
+        assert "com.slate.generated-at=2026-09-14T18:32:07Z" in joined
+
+    def test_itemlist_followup_never_touches_keys_family(self, tmp_path, monkeypatch):
+        target = tmp_path / "clip.mov"
+        target.write_bytes(b"original bytes")
+        fake_run, calls = self._make_fake_run(combined_write_error=TERMINATOR_ERROR)
+
+        self._embed(target, monkeypatch, fake_run)
+
+        itemlist_cmd = calls[-1]
+        assert itemlist_cmd[0] == "exiftool"
+        assert "-config" not in itemlist_cmd
+        assert not any(arg.startswith("-Keys:") for arg in itemlist_cmd)
+        assert any(arg.startswith("-ItemList:Title=") for arg in itemlist_cmd)
+        assert any(arg.startswith("-XMP-dc:Title=") for arg in itemlist_cmd)
+
+    def test_non_terminator_error_does_not_trigger_split(self, tmp_path, monkeypatch):
+        target = tmp_path / "clip.mov"
+        target.write_bytes(b"original bytes")
+        fake_run, calls = self._make_fake_run(
+            combined_write_error="exiftool: permission denied"
+        )
+
+        outcome = self._embed(target, monkeypatch, fake_run)
+
+        assert outcome.embedded is False
+        assert "permission denied" in outcome.error
+        assert not any(c[0] == "ffmpeg" for c in calls)
+        assert target.read_bytes() == b"original bytes"
+
+    def test_ffmpeg_failure_falls_back_to_original_error(self, tmp_path, monkeypatch):
+        target = tmp_path / "clip.mov"
+        target.write_bytes(b"original bytes")
+        fake_run, calls = self._make_fake_run(
+            combined_write_error=TERMINATOR_ERROR, ffmpeg_ok=False
+        )
+
+        outcome = self._embed(target, monkeypatch, fake_run)
+
+        assert outcome.embedded is False
+        assert "Terminator found in Meta" in outcome.error
+        # read, combined write, failed ffmpeg attempt -- no ItemList/XMP
+        # call, since that only ever follows a successful ffmpeg write.
+        assert len(calls) == 3
+        assert calls[-1][0] == "ffmpeg"
+        assert target.read_bytes() == b"original bytes"
+
+    def test_ffmpeg_succeeds_but_itemlist_followup_fails(self, tmp_path, monkeypatch):
+        target = tmp_path / "clip.mov"
+        target.write_bytes(b"original bytes")
+        fake_run, calls = self._make_fake_run(
+            combined_write_error=TERMINATOR_ERROR,
+            itemlist_write_error="exiftool: disk full",
+        )
+
+        outcome = self._embed(target, monkeypatch, fake_run)
+
+        assert outcome.embedded is False
+        assert "disk full" in outcome.error
+        assert any(c[0] == "ffmpeg" for c in calls)
+        # ffmpeg's Keys/mdta write still landed even though the follow-up
+        # ItemList/XMP write failed.
+        assert target.read_bytes() == b"repaired bytes"
+
+    def test_preserved_fields_survive_and_are_written_via_ffmpeg(
+        self, tmp_path, monkeypatch
+    ):
+        target = tmp_path / "clip.mov"
+        target.write_bytes(b"original bytes")
+        fake_run, calls = self._make_fake_run(
+            combined_write_error=TERMINATOR_ERROR,
+            read_json={"Title": "old title"},
+        )
+
+        outcome = self._embed(target, monkeypatch, fake_run)
+
+        assert outcome == EmbedOutcome(embedded=True, preserved_fields=["Title"])
+        ffmpeg_cmd = next(c for c in calls if c[0] == "ffmpeg")
+        assert "com.slate.original-title=old title" in " ".join(ffmpeg_cmd)
+
+    def test_mebx_repair_skipped_when_bento4_not_installed(self, tmp_path, monkeypatch):
+        # mebx_repair=None (the default) fakes mp4dump exiting non-zero, as
+        # if Bento4 weren't installed -- confirms the repair step is a
+        # silent no-op, not a hard dependency for the write itself.
+        target = tmp_path / "clip.mov"
+        target.write_bytes(b"original bytes")
+        fake_run, calls = self._make_fake_run(combined_write_error=TERMINATOR_ERROR)
+
+        outcome = self._embed(target, monkeypatch, fake_run)
+
+        assert outcome == EmbedOutcome(embedded=True, preserved_fields=[])
+        assert not any(c[0] in ("mp4extract", "mp4edit") for c in calls)
+        assert target.read_bytes() == b"repaired bytes"
+
+    def test_mebx_repair_skipped_when_no_fourcc_mismatch(self, tmp_path, monkeypatch):
+        target = tmp_path / "clip.mov"
+        target.write_bytes(b"original bytes")
+        fake_run, calls = self._make_fake_run(
+            combined_write_error=TERMINATOR_ERROR,
+            mebx_repair={
+                "original_fourccs": ["apcn", "mp4a"],
+                "remuxed_fourccs": ["apcn", "mp4a"],
+            },
+        )
+
+        outcome = self._embed(target, monkeypatch, fake_run)
+
+        assert outcome == EmbedOutcome(embedded=True, preserved_fields=[])
+        assert any(c[0] == "mp4dump" for c in calls)
+        assert not any(c[0] in ("mp4extract", "mp4edit") for c in calls)
+        assert target.read_bytes() == b"repaired bytes"
+
+    def test_mebx_repair_applied_on_fourcc_mismatch(self, tmp_path, monkeypatch):
+        target = tmp_path / "clip.mov"
+        target.write_bytes(b"original bytes")
+        fake_run, calls = self._make_fake_run(
+            combined_write_error=TERMINATOR_ERROR,
+            mebx_repair={
+                "original_fourccs": ["apcn", "mp4a", "mebx"],
+                "remuxed_fourccs": ["apcn", "mp4a", "stts"],
+            },
+        )
+
+        outcome = self._embed(target, monkeypatch, fake_run)
+
+        assert outcome == EmbedOutcome(embedded=True, preserved_fields=[])
+        extract_cmds = [c for c in calls if c[0] == "mp4extract"]
+        assert any("moov/trak[2]/mdia/hdlr" in c for c in extract_cmds)
+        assert any("moov/trak[2]/mdia/minf/stbl/stsd" in c for c in extract_cmds)
+        # Video/audio (index 0, 1) never mismatch under -c copy -- only the
+        # one mismatched track's atoms should be touched.
+        assert not any("trak[0]" in " ".join(c) for c in extract_cmds)
+        assert not any("trak[1]" in " ".join(c) for c in extract_cmds)
+        edit_cmd = next(c for c in calls if c[0] == "mp4edit")
+        assert "moov/trak[2]/mdia/hdlr:" in " ".join(edit_cmd)
+        assert "moov/trak[2]/mdia/minf/stbl/stsd:" in " ".join(edit_cmd)
+        # mp4edit's output replaces ffmpeg's raw output before the final
+        # swap into the real path -- confirms the repair actually lands.
+        assert target.read_bytes() == b"mebx repaired bytes"
+
+    def test_mebx_repair_skipped_when_track_counts_differ(self, tmp_path, monkeypatch):
+        target = tmp_path / "clip.mov"
+        target.write_bytes(b"original bytes")
+        fake_run, calls = self._make_fake_run(
+            combined_write_error=TERMINATOR_ERROR,
+            mebx_repair={
+                "original_fourccs": ["apcn", "mp4a", "mebx"],
+                "remuxed_fourccs": ["apcn", "mp4a"],
+            },
+        )
+
+        outcome = self._embed(target, monkeypatch, fake_run)
+
+        assert outcome == EmbedOutcome(embedded=True, preserved_fields=[])
+        assert not any(c[0] in ("mp4extract", "mp4edit") for c in calls)
+        assert target.read_bytes() == b"repaired bytes"
+
+    def test_mebx_repair_failure_leaves_ffmpeg_output_in_place(
+        self, tmp_path, monkeypatch
+    ):
+        # mp4edit failing (e.g. a malformed atom) must not fail the whole
+        # embed -- the Keys/mdta write ffmpeg already completed is still
+        # good; the mebx repair is strictly an enhancement on top of it.
+        target = tmp_path / "clip.mov"
+        target.write_bytes(b"original bytes")
+        fake_run, calls = self._make_fake_run(
+            combined_write_error=TERMINATOR_ERROR,
+            mebx_repair={
+                "original_fourccs": ["apcn", "mp4a", "mebx"],
+                "remuxed_fourccs": ["apcn", "mp4a", "stts"],
+                "mp4edit_ok": False,
+            },
+        )
+
+        outcome = self._embed(target, monkeypatch, fake_run)
+
+        assert outcome == EmbedOutcome(embedded=True, preserved_fields=[])
+        assert any(c[0] == "mp4edit" for c in calls)
+        assert target.read_bytes() == b"repaired bytes"

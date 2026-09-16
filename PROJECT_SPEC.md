@@ -769,6 +769,42 @@ or an equivalent blanket clear, so vendor-proprietary tracks (GoPro GPMF,
 DJI atoms, a Kino/Halide-style `mebx` timed-metadata track) and genuine
 camera fields stay untouched no matter what gets embedded.
 
+**Fallback for a known exiftool bug on certain vendor-written files.**
+Some recordings (confirmed on Lux Optics "Kino" captures, not on every
+iPhone ProRes file — a second app on the same phone/codec was tested and
+doesn't trigger it) hit a real exiftool bug parsing their top-level `meta`
+atom: the combined write above fails outright with a minor error whose
+text starts "Terminator found in" (`_RECOVERABLE_WRITE_ERROR_SIGNATURES`
+in `metadata.py`, a small curated tuple — deliberately not "any exiftool
+minor error," which would also catch unrelated warnings that have nothing
+to do with this bug and don't need this fallback's cost). When one of
+those signatures is seen, ownership of the three tag families splits in
+two rather than retrying the same write: `_ffmpeg_write_keys_family()`
+becomes the sole writer of the entire `Keys`/`mdta` family (repair + new
+values + provenance, via an `ffmpeg` stream-copy remux using
+fully-qualified `com.apple.quicktime.*`/`com.slate.*` `-metadata` keys),
+and a second, narrower `exiftool` call — never touching `-Keys:` — handles
+`ItemList`/XMP-dc afterward. An earlier design that just repaired the atom
+structurally and retried the *same* combined `exiftool` write looked
+correct under `exiftool`'s own reads but silently concatenated slate's new
+values into the vendor's tags (visible via `ffprobe`, invisible to
+`exiftool` since it resolves the name collision silently) — root cause and
+full validation history are in `spec/metadata-write-corruption.md`.
+
+That `ffmpeg` remux has a side effect: it dummy-values the sample
+description/handler type of any track type its `mov` muxer doesn't
+recognize — a Kino-style `mebx` timed-metadata track, for instance —
+while leaving that track's actual sample data untouched.
+`_repair_mislabeled_data_tracks()` detects this (comparing each track's
+`stsd` fourcc before/after the remux) and repairs it by splicing the real
+atoms back in from the pre-remux file via Bento4's `mp4extract`/`mp4edit`
+(`brew install bento4`, not a preflight-checked hard requirement — this
+repair is strictly best-effort and silently no-ops if Bento4 isn't
+installed, since the Keys/mdta write it runs after has already succeeded
+by that point). See "Follow-up: fixing the `mebx` mislabeling with
+Bento4" in `spec/metadata-write-corruption.md` for the detection/repair
+mechanism in full.
+
 **Error handling — skip-and-warn, not abort.** By the time
 `metadata.embed_metadata()` runs, the physical rename has already
 happened (see "Where This Runs," below), so a single file's `exiftool`
