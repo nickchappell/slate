@@ -20,6 +20,9 @@ Personal-use tool. See `PROJECT_SPEC.md` for the full design.
 - [Getting Started](#getting-started)
 - [Installation](#installation)
   - [Prerequisites](#prerequisites)
+  - [Software Dependencies](#software-dependencies)
+    - [Included with macOS](#included-with-macos)
+    - [Homebrew](#homebrew)
   - [Installing `slate` onto your `$PATH`](#installing-slate-onto-your-path)
   - [Model weights (first-run download)](#model-weights-first-run-download)
 - [Usage](#usage)
@@ -76,19 +79,40 @@ slate --input-dir ~/Movies/Footage --process-and-rename
   runs on Apple Silicon, and ProRes RAW decoding relies on macOS-only
   frameworks. `slate` will refuse to run on Intel Macs or other platforms
   with a clear error rather than a cryptic import failure.
-- **`ffmpeg` and `ffprobe`** on `PATH` -- not bundled with macOS. Install via
-  Homebrew:
+- **[`uv`](https://docs.astral.sh/uv/)** for installing/running the tool.
+  Can also be installed via [Homebrew](https://docs.astral.sh/uv/getting-started/installation/#homebrew):
   ```bash
-  brew install ffmpeg
+  brew install uv
   ```
+- **`make`** -- only needed for development (running the `Makefile` targets:
+  tests, lint, formatting, releases); not required to install or run
+  `slate` itself.
+
+See "Software Dependencies," below, for the external binaries `slate`
+shells out to.
+
+### Software Dependencies
+
+#### Included with macOS
+
 - **`qlmanage` and `sips`** on `PATH` -- standard macOS system binaries
   (`/usr/bin/qlmanage`, `/usr/bin/sips`), present on any normal install.
   `slate` checks for them anyway as a defensive guard against unusual
   environments (minimal/managed images, stripped-down runners).
-- **`exiftool`** on `PATH` -- not bundled with macOS. Install via Homebrew:
-  ```bash
-  brew install exiftool
-  ```
+
+#### Homebrew
+
+Not bundled with macOS -- install all three at once:
+
+```bash
+brew install ffmpeg exiftool bento4
+```
+
+- **`ffmpeg` and `ffprobe`** on `PATH` -- used for input validation,
+  MOV/MP4 pairing, and frame extraction (see "Under the Hood," below).
+- **`exiftool`** on `PATH` -- used to embed Title/Description/Keywords
+  metadata when `--add-metadata`/`--metadata-backfill` is passed (see
+  "Embedding Metadata," below).
 - **`bento4`** on `PATH` -- required whenever you pass `--add-metadata` or
   `--metadata-backfill`; not needed otherwise. It repairs a timed metadata
   track that a rare `exiftool`-write fallback would otherwise leave
@@ -99,14 +123,7 @@ slate --input-dir ~/Movies/Footage --process-and-rename
   exist in the pre-remux bytes, which are gone by then (see
   `spec/metadata-write-corruption.md`). So `slate` now refuses to start
   with either of those two flags if `bento4` isn't installed, the same way
-  it refuses to start without `ffmpeg`/`exiftool`. Install via Homebrew:
-  ```bash
-  brew install bento4
-  ```
-- **[`uv`](https://docs.astral.sh/uv/)** for installing/running the tool.
-- **`make`** -- only needed for development (running the `Makefile` targets:
-  tests, lint, formatting, releases); not required to install or run
-  `slate` itself.
+  it refuses to start without `ffmpeg`/`exiftool`.
 
 The platform/`ffmpeg`/`ffprobe`/`qlmanage`/`sips`/`exiftool` requirements
 above are checked once at the start of every `slate` invocation (see
