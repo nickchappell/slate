@@ -54,6 +54,7 @@ def test_dry_run_against_real_footage(tmp_path):
         prefix="",
         suffix="",
         max_file_name_length=config.max_file_name_length,
+        num_frames_for_caption=config.num_frames_for_caption,
     )
 
     assert all_entries, "expected at least one group to be produced"
