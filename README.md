@@ -77,8 +77,7 @@ slate --input-dir ~/Movies/Footage --process-and-rename
 - **Apple Silicon Mac.** This is a hard requirement, checked at startup, not
   just a recommendation: [`mlx-vlm`](https://github.com/Blaizzy/mlx-vlm) only
   runs on Apple Silicon, and ProRes RAW decoding relies on macOS-only
-  frameworks. `slate` will refuse to run on Intel Macs or other platforms
-  with a clear error rather than a cryptic import failure.
+  frameworks. `slate` will refuse to run on Intel Macs or other OS/arch platforms.
 - **[`uv`](https://docs.astral.sh/uv/)** for installing/running the tool.
   Can also be installed via [Homebrew](https://docs.astral.sh/uv/getting-started/installation/#homebrew):
   ```bash
@@ -100,9 +99,10 @@ shells out to.
   `slate` checks for them anyway as a defensive guard against unusual
   environments (minimal/managed images, stripped-down runners).
 
-#### Homebrew
+#### Not included with macOS
 
-Not bundled with macOS -- install all three at once:
+`slate` requires a few other CLI tools that are not bundled with macOS and need to be installed
+with Homebrew:
 
 ```bash
 brew install ffmpeg exiftool bento4
@@ -156,7 +156,7 @@ goes through `huggingface_hub`'s standard cache, not anything `slate`-specific:
 
 > [!NOTE]
 > **First run** with a given model requires network access to download its
-> weights. This is the one exception to "no cloud dependency" -- every run
+> weights. This is the only time network/Internet access is needed -- every run
 > after that is fully local.
 
 - **Cached at** `~/.cache/huggingface/hub/`, shared with any other tool that
@@ -479,7 +479,7 @@ the `gh` CLI:
 > `create-release` pushes your current branch and the new tag to `origin`
 > and creates a public GitHub release -- these are visible, shared-state
 > actions, not local/reversible ones. Make sure you actually want to ship
-> before running it.
+> before running it!
 
 ```bash
 make bump-version PART=patch   # or minor / major -- default is patch
