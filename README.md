@@ -89,11 +89,17 @@ slate --input-dir ~/Movies/Footage --process-and-rename
   ```bash
   brew install exiftool
   ```
-- **`bento4`** on `PATH` -- *optional*, not checked at startup and not
-  required for `--add-metadata` to work. Only used to repair a timed
-  metadata track that a rare `exiftool`-write fallback would otherwise
-  leave mislabeled (see "Embedding Metadata" below); everything else works
-  the same without it. Install via Homebrew:
+- **`bento4`** on `PATH` -- required whenever you pass `--add-metadata` or
+  `--metadata-backfill`; not needed otherwise. It repairs a timed metadata
+  track that a rare `exiftool`-write fallback would otherwise leave
+  permanently mislabeled (see "Embedding Metadata" below). This used to be
+  an optional, best-effort dependency, but the damage it repairs can't be
+  fixed by installing `bento4` and re-running later -- the fallback remux
+  that causes it overwrites the file, and the atoms the repair needs only
+  exist in the pre-remux bytes, which are gone by then (see
+  `spec/metadata-write-corruption.md`). So `slate` now refuses to start
+  with either of those two flags if `bento4` isn't installed, the same way
+  it refuses to start without `ffmpeg`/`exiftool`. Install via Homebrew:
   ```bash
   brew install bento4
   ```
@@ -105,7 +111,9 @@ slate --input-dir ~/Movies/Footage --process-and-rename
 The platform/`ffmpeg`/`ffprobe`/`qlmanage`/`sips`/`exiftool` requirements
 above are checked once at the start of every `slate` invocation (see
 "Preflight Checks" in `PROJECT_SPEC.md`); every problem is reported
-together, not one-at-a-time.
+together, not one-at-a-time. `bento4` gets its own check, reported
+alongside the rest, but only runs -- and only blocks startup -- when
+`--add-metadata` or `--metadata-backfill` is passed.
 
 ### Installing `slate` onto your `$PATH`
 
@@ -312,10 +320,13 @@ On a small number of vendor-written files (seen so far on Lux Optics
 "Kino" recordings) the metadata write hits a real bug in `exiftool` and
 would otherwise fail outright; `slate` detects this and transparently
 falls back to an `ffmpeg`-based remux instead, with no different flags or
-behavior required on your part. If `bento4` is also installed (see
-Prerequisites above), that fallback additionally repairs a timed
-metadata track it would otherwise mislabel -- entirely optional, and
-everything else about `--add-metadata` works identically without it.
+behavior required on your part. That fallback remux also has a side
+effect: it can mislabel a timed metadata track it doesn't otherwise touch
+(e.g. Kino's GPS track), which `bento4` (see Prerequisites above) repairs
+as part of the same fallback. Since that repair can't be done after the
+fact once the fallback has run, `bento4` is a hard requirement of
+`--add-metadata`/`--metadata-backfill`, not an optional extra -- `slate`
+refuses to start with either flag if it's missing.
 
 Add `--verbose`/`-v` to see exactly what's being written, without having to
 open `rename_mappings.json` or run `exiftool` yourself:
@@ -668,10 +679,10 @@ files a past run already renamed. On certain vendor-written files (seen so
 far on Lux Optics "Kino" recordings, not on every iPhone ProRes file --
 see `spec/metadata-write-corruption.md`) the `exiftool` write hits a real
 exiftool bug and fails outright; `slate` transparently falls back to an
-`ffmpeg`-based remux for the `Keys`/`mdta` tag family, and (if `bento4` is
-installed) repairs a timed-metadata track that remux would otherwise
-mislabel. See "Metadata Embedding" in `PROJECT_SPEC.md` for the full
-design.
+`ffmpeg`-based remux for the `Keys`/`mdta` tag family, and repairs (via
+`bento4`, a hard requirement of `--add-metadata`/`--metadata-backfill`) a
+timed-metadata track that remux would otherwise mislabel. See "Metadata
+Embedding" in `PROJECT_SPEC.md` for the full design.
 
 **`--verbose`/`-v` surfaces what `--add-metadata` is about to write, inline
 in the terminal** -- a one-time legend (the Title/Description/Keywords →

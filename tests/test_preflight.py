@@ -1,7 +1,7 @@
 import platform
 import shutil
 
-from slate.preflight import run_preflight_checks
+from slate.preflight import run_metadata_tool_checks, run_preflight_checks
 
 
 def make_which(available: set[str]):
@@ -9,6 +9,7 @@ def make_which(available: set[str]):
 
 
 ALL_TOOLS = {"ffmpeg", "ffprobe", "qlmanage", "sips", "exiftool"}
+ALL_BENTO4_TOOLS = {"mp4dump", "mp4extract", "mp4edit"}
 
 
 class TestRunPreflightChecks:
@@ -73,3 +74,39 @@ class TestRunPreflightChecks:
         monkeypatch.setattr(shutil, "which", make_which(set()))
         failures = run_preflight_checks()
         assert len(failures) == 7
+
+    def test_ignores_bento4_availability(self, monkeypatch):
+        # Bento4 is checked separately, by run_metadata_tool_checks() below
+        # (gated on --add-metadata/--metadata-backfill by the caller) --
+        # run_preflight_checks() must never fail on its absence.
+        monkeypatch.setattr(platform, "system", lambda: "Darwin")
+        monkeypatch.setattr(platform, "machine", lambda: "arm64")
+        monkeypatch.setattr(shutil, "which", make_which(ALL_TOOLS))
+        assert run_preflight_checks() == []
+
+
+class TestRunMetadataToolChecks:
+    def test_all_present_returns_no_failures(self, monkeypatch):
+        monkeypatch.setattr(shutil, "which", make_which(ALL_BENTO4_TOOLS))
+        assert run_metadata_tool_checks() == []
+
+    def test_missing_mp4dump_reports_failure_with_brew_hint(self, monkeypatch):
+        monkeypatch.setattr(shutil, "which", make_which(ALL_BENTO4_TOOLS - {"mp4dump"}))
+        failures = run_metadata_tool_checks()
+        assert any("mp4dump" in f and "brew install bento4" in f for f in failures)
+
+    def test_missing_mp4extract_reports_failure(self, monkeypatch):
+        monkeypatch.setattr(
+            shutil, "which", make_which(ALL_BENTO4_TOOLS - {"mp4extract"})
+        )
+        failures = run_metadata_tool_checks()
+        assert any("mp4extract" in f for f in failures)
+
+    def test_missing_mp4edit_reports_failure(self, monkeypatch):
+        monkeypatch.setattr(shutil, "which", make_which(ALL_BENTO4_TOOLS - {"mp4edit"}))
+        failures = run_metadata_tool_checks()
+        assert any("mp4edit" in f for f in failures)
+
+    def test_none_present_reports_all_three_together(self, monkeypatch):
+        monkeypatch.setattr(shutil, "which", make_which(set()))
+        assert len(run_metadata_tool_checks()) == 3

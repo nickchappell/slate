@@ -42,7 +42,7 @@ from slate.mappings import (
 )
 from slate.metadata import EmbedOutcome
 from slate.pairing import build_groups, discover_input_dir, validate_media_files
-from slate.preflight import run_preflight_checks
+from slate.preflight import run_metadata_tool_checks, run_preflight_checks
 from slate.rename import (
     RenameLogEntry,
     build_rename_plan,
@@ -474,8 +474,13 @@ def _effective_settings(args: argparse.Namespace):
     )
 
 
-def _run_preflight_or_exit() -> None:
-    failures = run_preflight_checks()
+def _run_preflight_or_exit(*, require_metadata_tools: bool) -> None:
+    failures = list(run_preflight_checks())
+    # Bento4 is only required when --add-metadata/--metadata-backfill are
+    # in play -- see run_metadata_tool_checks()'s docstring for why this
+    # can't just live in run_preflight_checks()'s unconditional list.
+    if require_metadata_tools:
+        failures += run_metadata_tool_checks()
     if failures:
         output.fatal("slate cannot run in this environment:")
         for message in failures:
@@ -1173,7 +1178,9 @@ def main(argv: list[str] | None = None) -> None:
                 "--metadata-mappings"
             )
 
-        _run_preflight_or_exit()
+        _run_preflight_or_exit(
+            require_metadata_tools=banner_add_metadata or args.metadata_backfill
+        )
 
         (
             config,

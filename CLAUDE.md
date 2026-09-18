@@ -151,16 +151,23 @@ Module layout under `src/slate/`:
   files (confirmed on Lux Optics "Kino" recordings; a second app on the
   same phone/codec doesn't trigger it) that write fails on a real exiftool
   bug and falls back to an `ffmpeg` remux owning the entire `Keys`/`mdta`
-  family, followed by a Bento4-based (`mp4extract`/`mp4edit`, optional —
-  `brew install bento4`, not preflight-checked) repair of a timed
-  metadata track that remux would otherwise mislabel — see
-  `spec/metadata-write-corruption.md` for the full investigation
+  family, followed by a Bento4-based (`mp4extract`/`mp4edit`, `brew
+  install bento4` — a hard requirement of `--add-metadata`/
+  `--metadata-backfill`, since a file processed without it can't be
+  repaired by a later run) repair of a timed metadata track that remux
+  would otherwise mislabel — see `spec/metadata-write-corruption.md` for
+  the full investigation
 - `output.py` — centralized `rich`-based colorized console output
 - `pairing.py` — MOV/MP4 pairing: verifies same-stem files via `ffprobe`
   duration/frame-count before trusting either as a stand-in for the other;
   picks the smaller file as the captioning source
 - `preflight.py` — startup platform/binary checks, all run and reported
-  together rather than failing at the first problem
+  together rather than failing at the first problem; also
+  `run_metadata_tool_checks()`, a separate, conditional check for
+  Bento4's `mp4dump`/`mp4extract`/`mp4edit` that only runs (and only
+  blocks startup) when `--add-metadata`/`--metadata-backfill` is passed —
+  see `metadata.py`'s entry below for why this is a hard requirement, not
+  an advisory one
 - `rename.py` — rename plan/execution, audit trail, undo script generation
 - `review_sync.py` — reconciles `rename_mappings.json` against human renames
   of preview JPEGs in `review/`, via each JPEG's SHA-256 (a plain rename

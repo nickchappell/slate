@@ -66,6 +66,34 @@ useful than fixing one, re-running, and discovering the next.
    cost of requiring `exiftool` even for users who never touch those
    flags. Error message should suggest the fix (`brew install exiftool`).
 
+**Conditional, fatal check — not part of the flat list above:**
+`mp4dump`/`mp4extract`/`mp4edit` (Bento4, `brew install bento4`) back the
+`mebx`-track repair described in Metadata Embedding, below.
+`run_metadata_tool_checks()` (`preflight.py`) is a second, separate
+function from `run_preflight_checks()`, but unlike check 7's flat/
+mode-unaware treatment of `exiftool`, this one is *conditional*: the
+caller (`cli._run_preflight_or_exit`) only runs it, and only lets its
+failures block startup, when `--add-metadata` or `--metadata-backfill` is
+passed — requiring Bento4 unconditionally would force it on every user,
+including ones who never touch metadata embedding at all.
+
+Once gated on that flag, though, a missing Bento4 binary *is* just as
+fatal as a missing `exiftool`, not a warn-and-continue: an earlier design
+treated it as advisory, on the theory that the `mebx` repair it enables
+is best-effort on top of a Keys/mdta write that already succeeded without
+it. That's true in isolation, but it misses that the repair's *inputs*
+(the pre-remux `hdlr`/`stsd` atoms) only exist transiently, inside the one
+`_ffmpeg_write_keys_family()` call that needs them — once that call
+finishes and overwrites the file, they're gone. So a file processed while
+Bento4 is missing can never be repaired by a later run, even after
+installing Bento4 and re-trying — there's nothing left to source the
+correct atoms from (see spec/metadata-write-corruption.md's "Where this
+leaves things" for the full reasoning). A silent warning under those
+conditions risks the exact permanent, unrecoverable degradation this
+whole investigation was trying to prevent — hence a hard requirement,
+same severity as checks 1–7, just conditional on the two flags instead of
+unconditional.
+
 **Scope note:** these checks only confirm the five binaries exist and are
 executable — they say nothing about whether `ffmpeg`/`qlmanage` can decode
 any *particular* clip's codec. That's a separate, per-file concern already
@@ -798,12 +826,19 @@ while leaving that track's actual sample data untouched.
 `_repair_mislabeled_data_tracks()` detects this (comparing each track's
 `stsd` fourcc before/after the remux) and repairs it by splicing the real
 atoms back in from the pre-remux file via Bento4's `mp4extract`/`mp4edit`
-(`brew install bento4`, not a preflight-checked hard requirement — this
-repair is strictly best-effort and silently no-ops if Bento4 isn't
-installed, since the Keys/mdta write it runs after has already succeeded
-by that point). See "Follow-up: fixing the `mebx` mislabeling with
-Bento4" in `spec/metadata-write-corruption.md` for the detection/repair
-mechanism in full.
+(`brew install bento4`). `bento4` is a hard requirement whenever
+`--add-metadata`/`--metadata-backfill` is used, checked up front by
+`run_metadata_tool_checks()` (see "Preflight Checks," above) — not
+because the repair itself can't function without it (structurally, it's
+still just best-effort atom-splicing on top of a Keys/mdta write that
+already succeeded), but because a file processed while it's missing can
+never be repaired later: the correct atoms only exist in the pre-remux
+bytes, which this same function's remux overwrites moments after they're
+read. An earlier, advisory-only design skipped the repair silently in
+that case, which is exactly the unrecoverable outcome the fatal check now
+prevents. See "Follow-up: fixing the `mebx` mislabeling with Bento4" in
+`spec/metadata-write-corruption.md` for the detection/repair mechanism in
+full.
 
 **Error handling — skip-and-warn, not abort.** By the time
 `metadata.embed_metadata()` runs, the physical rename has already

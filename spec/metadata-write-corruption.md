@@ -652,7 +652,40 @@ step too. Concretely unresolved for future work:
   Pro) was tested and hits neither (see "Follow-up: is this bug specific
   to Kino..."), but that's two data points, not a survey. Worth revisiting
   if/when more third-party-app ProRes fixtures turn up.
-- Whether `bento4` should be added to `preflight.py`'s checks (as an
-  optional dependency -- `--add-metadata` should still work, just without
-  the `mebx` repair, when it's absent) and documented in `README.md`/
-  `PROJECT_SPEC.md` alongside `exiftool`/`ffmpeg`.
+
+**Resolved (2026-09-17):** `bento4` is now checked at startup via a new
+`preflight.run_metadata_tool_checks()`, gated on
+`--add-metadata`/`--metadata-backfill` being passed (see "Preflight
+Checks" in `PROJECT_SPEC.md`). This went through two designs the same
+day: the first made it advisory (a startup warning, never fatal), on the
+theory that the `mebx` repair it enables is best-effort on top of a
+Keys/mdta write that already succeeds without it. That missed a sharper
+point, surfaced by working through the failure mode explicitly: once
+`_ffmpeg_write_keys_family()` has run on a file without Bento4 present,
+that file's `mebx` damage can never be fixed by a *later* run, even after
+installing Bento4 -- the correct `hdlr`/`stsd` atoms only exist in the
+pre-remux bytes, which that same call's `tmp_output.replace(path)`
+overwrites moments after reading them (see "Follow-up: fixing the `mebx`
+mislabeling with Bento4," above). A silent warning was therefore only
+ever one missed line of terminal output away from irreversible,
+undetected degradation. The check is now fatal, at the same severity as
+`exiftool`/`ffmpeg`'s checks -- `slate` refuses to start with either flag
+if `bento4` isn't installed, full stop -- just conditional on those two
+flags rather than unconditional the way `exiftool`'s check is. Documented
+in `README.md`'s Prerequisites and "Embedding Metadata" sections
+alongside `exiftool`/`ffmpeg`.
+
+The Kino-vs-Moment-Pro contrast this doc investigates by hand above is
+also now covered by a real-fixture integration suite,
+`tests/integration/test_metadata_write_quirks.py` (tagged
+`@pytest.mark.kino`/`@pytest.mark.momentpro`, runnable independently via
+`pytest -m kino`/`pytest -m momentpro`): it asserts Kino triggers the
+`_ffmpeg_write_keys_family()` fallback and gets its `mebx` track repaired
+when Bento4 is present, while Moment Pro's write succeeds without ever
+invoking that fallback -- plus a vendor-tag survival check on both. A
+further test, `test_kino_mebx_track_stays_mislabeled_without_bento4`,
+simulates Bento4's absence at the `metadata.py` function level (not
+reachable through the CLI anymore now that `bento4` is preflight-required)
+to document, precisely, the unrecoverable state this whole fix exists to
+prevent: `embed_metadata()` still reports success, but the file's `mebx`
+track is left permanently mislabeled.

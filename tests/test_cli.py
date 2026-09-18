@@ -12,6 +12,7 @@ from slate.cli import (
     _effective_settings,
     _mode_description,
     _resolve_input_files,
+    _run_preflight_or_exit,
     _validate_mode_flags,
     build_parser,
 )
@@ -487,6 +488,53 @@ class TestCheckMappingVersionOrExit:
         path.write_text(f'{{"app_version": "{current_major + 1}.0.0", "groups": []}}')
         with pytest.raises(SystemExit):
             _check_mapping_version_or_exit(path)
+
+
+class TestRunPreflightOrExit:
+    def test_require_metadata_tools_false_skips_the_check_entirely(
+        self, monkeypatch, capsys
+    ):
+        def _boom():
+            raise AssertionError("should not run when metadata tools aren't required")
+
+        monkeypatch.setattr(cli, "run_preflight_checks", lambda: [])
+        monkeypatch.setattr(cli, "run_metadata_tool_checks", _boom)
+        _run_preflight_or_exit(require_metadata_tools=False)
+        assert capsys.readouterr().out == ""
+
+    def test_require_metadata_tools_true_and_all_present_does_not_exit(
+        self, monkeypatch, capsys
+    ):
+        monkeypatch.setattr(cli, "run_preflight_checks", lambda: [])
+        monkeypatch.setattr(cli, "run_metadata_tool_checks", lambda: [])
+        _run_preflight_or_exit(require_metadata_tools=True)
+        assert capsys.readouterr().out == ""
+
+    def test_require_metadata_tools_true_and_missing_tools_exits(
+        self, monkeypatch, capsys
+    ):
+        monkeypatch.setattr(cli, "run_preflight_checks", lambda: [])
+        monkeypatch.setattr(
+            cli,
+            "run_metadata_tool_checks",
+            lambda: ["required tool 'mp4dump' not found on PATH"],
+        )
+        with pytest.raises(SystemExit):
+            _run_preflight_or_exit(require_metadata_tools=True)
+        assert "mp4dump" in capsys.readouterr().err
+
+    def test_preflight_and_metadata_tool_failures_reported_together(
+        self, monkeypatch, capsys
+    ):
+        monkeypatch.setattr(cli, "run_preflight_checks", lambda: ["missing ffmpeg"])
+        monkeypatch.setattr(
+            cli, "run_metadata_tool_checks", lambda: ["missing mp4dump"]
+        )
+        with pytest.raises(SystemExit):
+            _run_preflight_or_exit(require_metadata_tools=True)
+        err = capsys.readouterr().err
+        assert "missing ffmpeg" in err
+        assert "missing mp4dump" in err
 
 
 class TestRunPhase2:
