@@ -46,6 +46,8 @@ testpaths = ["tests"]
 addopts = ["--strict-markers", "--strict-config"]
 markers = [
     "integration: exercises real ffmpeg/qlmanage/mlx-vlm against footage in tests/fixtures/footage/ (auto-skipped when empty)",
+    "kino: exercises quirks specific to Lux Optics Kino recordings (the exiftool meta-atom bug and mebx-track repair -- see spec/metadata-write-corruption.md)",
+    "momentpro: exercises the Moment Pro fixture as a minimal-pair control that hits neither Kino quirk -- see spec/metadata-write-corruption.md",
 ]
 
 [tool.coverage.run]
