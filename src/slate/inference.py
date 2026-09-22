@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import string
 from dataclasses import dataclass
 from functools import lru_cache
@@ -228,9 +229,17 @@ def _split_sections(raw_text: str) -> dict[str, str]:
     """Splits raw_text on SHORT:/LONG:/KEYWORDS: markers, wherever present,
     regardless of order. Returns {marker_name_lowercase: section_text}."""
     # Find each marker's position, then slice from one marker to the next.
+    # Matched case-insensitively -- the quantized model doesn't reliably
+    # keep the prompt's uppercase labels (observed emitting "short:"/
+    # "long:"/"keywords:"), and a missed marker here means its whole
+    # section falls through as unparsed text (see cli.py's SHORT fallback,
+    # which is exactly what a missed marker used to leak into filenames).
+    # Uppercasing before searching doesn't shift any index, since every
+    # marker is plain ASCII.
+    upper_text = raw_text.upper()
     positions: list[tuple[int, str]] = []
     for marker in _SECTION_MARKERS:
-        idx = raw_text.find(marker)
+        idx = upper_text.find(marker)
         if idx != -1:
             positions.append((idx, marker))
     positions.sort()
@@ -241,6 +250,51 @@ def _split_sections(raw_text: str) -> dict[str, str]:
         text = raw_text[start + len(marker) : end].strip()
         sections[marker[:-1].lower()] = text
     return sections
+
+
+# The model sometimes echoes the prompt's own <placeholder> instruction
+# text back instead of filling it in -- verbatim ("<3-6 words, for a
+# filename>" -> "3-6 words"), truncated to a leading fragment, or
+# paraphrased with digits swapped in for spelled-out numbers (LONG's "one
+# to two sentences" -> "1-2 sentences"). Left unfiltered, this used to
+# flow straight into the filename/metadata as if it were real content.
+# Kept in sync by hand with config.METADATA_PROMPT /
+# config.METADATA_BACKFILL_PROMPT's placeholder text -- there's no shared
+# constant because the prompt wraps these across lines for readability,
+# while matching here works against the whitespace-collapsed form.
+_SHORT_PLACEHOLDER = "3-6 words, for a filename"
+_LONG_PLACEHOLDER = "one to two sentences"
+_KEYWORDS_PLACEHOLDER = (
+    "6-10 comma-separated single words or short phrases naming subjects, "
+    "actions, and setting -- no articles, no full sentences"
+)
+_SECTION_PLACEHOLDERS = {
+    "short": _SHORT_PLACEHOLDER,
+    "long": _LONG_PLACEHOLDER,
+    "keywords": _KEYWORDS_PLACEHOLDER,
+}
+
+# A paraphrased count echo is lexically unrelated to the placeholder text
+# above (no shared substring to match against), so it needs its own
+# pattern: real caption content never legitimately opens by describing a
+# word/sentence count the way the prompt's own instructions do.
+_COUNT_ECHO_RE = re.compile(
+    r"^(?:\d+\s*(?:-|to)\s*\d+|one to two|a few)\s+(?:words?|sentences?)\b",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_placeholder_echo(section_name: str, text: str) -> bool:
+    """True if `text` looks like the model echoed the prompt's own
+    <placeholder> instruction for `section_name` instead of producing
+    real content -- exact echo, a truncated prefix of it, or a
+    count-paraphrase (see _COUNT_ECHO_RE)."""
+    normalized = " ".join(text.strip().strip("<>").split()).lower()
+    if not normalized:
+        return False
+    if _SECTION_PLACEHOLDERS[section_name].lower().startswith(normalized):
+        return True
+    return bool(_COUNT_ECHO_RE.match(normalized))
 
 
 def _looks_like_keyword_list(text: str) -> bool:
@@ -263,6 +317,23 @@ def _clean_keyword(raw: str) -> str:
     if len(text) >= 2 and text[0] == text[-1] and text[0] in "\"'":
         text = text[1:-1].strip()
     return text
+
+
+def derive_short_from_long(long_caption: str, max_words: int = 6) -> str:
+    """Fallback for when SHORT is missing but LONG parsed successfully
+    (e.g. the model skipped SHORT outright): the first max_words words of
+    LONG, not the full raw multi-section response -- see cli.py's caller.
+    Deliberately cheap/mechanical, same spirit as
+    _derive_keywords_from_long."""
+    return " ".join(long_caption.split()[:max_words])
+
+
+def derive_short_from_keywords(keywords: list[str], max_keywords: int = 4) -> str:
+    """Last-resort fallback for when both SHORT and LONG are missing/
+    placeholder-echoes but KEYWORDS parsed successfully: join the first
+    max_keywords keywords, not the full raw multi-section response -- see
+    cli.py's caller."""
+    return " ".join(keywords[:max_keywords])
 
 
 def _derive_keywords_from_long(long_caption: str, max_keywords: int = 10) -> list[str]:
@@ -289,17 +360,35 @@ def _derive_keywords_from_long(long_caption: str, max_keywords: int = 10) -> lis
 
 def parse_caption_sections(raw_text: str) -> CaptionSections:
     """Parses a SHORT:/LONG:/KEYWORDS: (or LONG:/KEYWORDS: only, for the
-    backfill prompt) response. Any section may be absent. A malformed or
-    missing KEYWORDS section falls back to _derive_keywords_from_long()
-    against whatever LONG text was parsed."""
+    backfill prompt) response. Any section may be absent. A section whose
+    text is just the model echoing its own <placeholder> instruction back
+    (see _looks_like_placeholder_echo) is treated the same as an absent
+    section, not as real content. A malformed or missing KEYWORDS section
+    falls back to _derive_keywords_from_long() against whatever LONG text
+    was parsed."""
     sections = _split_sections(raw_text)
 
-    short = sections.get("short") or None
-    long_text = sections.get("long") or None
+    raw_short = sections.get("short")
+    short = (
+        raw_short
+        if raw_short and not _looks_like_placeholder_echo("short", raw_short)
+        else None
+    )
+
+    raw_long = sections.get("long")
+    long_text = (
+        raw_long
+        if raw_long and not _looks_like_placeholder_echo("long", raw_long)
+        else None
+    )
 
     keywords: list[str] | None
     raw_keywords = sections.get("keywords")
-    if raw_keywords and _looks_like_keyword_list(raw_keywords):
+    if (
+        raw_keywords
+        and not _looks_like_placeholder_echo("keywords", raw_keywords)
+        and _looks_like_keyword_list(raw_keywords)
+    ):
         keywords = [_clean_keyword(kw) for kw in raw_keywords.split(",") if kw.strip()]
         keywords = [kw for kw in keywords if kw]
     elif long_text:

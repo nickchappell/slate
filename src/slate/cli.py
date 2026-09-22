@@ -27,6 +27,8 @@ from slate.filenames import (
 from slate.inference import (
     MAX_CAPTION_TOKENS_WITH_METADATA,
     check_for_model_updates,
+    derive_short_from_keywords,
+    derive_short_from_long,
     generate_caption,
     parse_caption_sections,
 )
@@ -653,7 +655,22 @@ def run_phase1(
                     max_tokens=MAX_CAPTION_TOKENS_WITH_METADATA,
                 )
                 sections = parse_caption_sections(raw_text)
-                short_text = sections.short or raw_text
+                # SHORT missing (or just an echoed <placeholder>) --
+                # derive a short caption from LONG, then KEYWORDS, rather
+                # than falling back to the full raw multi-section
+                # response, which would otherwise leak "long: ...
+                # keywords: ..." text (and echoed prompt instructions like
+                # "3-6 words") straight into the filename. Only truly
+                # unstructured output (nothing parsed at all) falls back
+                # to raw_text itself.
+                if sections.short:
+                    short_text = sections.short
+                elif sections.long:
+                    short_text = derive_short_from_long(sections.long)
+                elif sections.keywords:
+                    short_text = derive_short_from_keywords(sections.keywords)
+                else:
+                    short_text = raw_text
                 long_caption = (
                     normalize_long_caption(sections.long) if sections.long else None
                 )

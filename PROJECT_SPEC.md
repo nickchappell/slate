@@ -697,8 +697,15 @@ KEYWORDS: <6-10 comma-separated single words or short phrases>
 estimate pending empirical tuning against real footage) replaces the
 plain-caption `MAX_CAPTION_TOKENS` (25) budget for this path.
 `inference.parse_caption_sections()` splits the response on the
-`SHORT:`/`LONG:`/`KEYWORDS:` markers (order-independent, any subset may be
-absent — `--metadata-backfill`'s prompt below omits `SHORT:` entirely).
+`SHORT:`/`LONG:`/`KEYWORDS:` markers (order-independent and matched
+case-insensitively, any subset may be absent — `--metadata-backfill`'s
+prompt below omits `SHORT:` entirely). Case-insensitive matching matters
+in practice: the quantized default model doesn't reliably keep the
+prompt's uppercase labels, and a marker it emits in lowercase that the
+parser doesn't recognize misses that whole section — before this was
+case-insensitive, a missed `SHORT:` left `.short` `None` and `cli.py`'s
+caller fell back to the *entire* raw response, leaking
+`long: ... keywords: ...` text straight into filenames.
 KEYWORDS is the least-constrained of the three and the most likely to
 break format on a quantized model; if it's missing or doesn't parse as a
 comma list, `inference._derive_keywords_from_long()` falls back to a
@@ -708,7 +715,32 @@ not real NLP (spaCy/nltk would cut against the lazy-import discipline in
 "Startup Time," above), and deliberately just a safety net: the model
 asked directly can name concepts it saw but never wrote as literal words
 ("recreation," "watercraft"), which a mechanical word-strip can never
-recover.
+recover. SHORT gets the same treatment on the other end: if it's missing
+but LONG parsed, `cli.py`'s caller uses `inference.derive_short_from_long()`
+(first few words of LONG) for the filename caption, falling further back
+to `inference.derive_short_from_keywords()` (first few keywords) if LONG
+is unusable too; only genuinely unstructured output (nothing parsed at
+all) falls back to the raw text as-is.
+
+A related failure mode: the model sometimes echoes the prompt's own
+`<placeholder>` instruction text back instead of filling it in —
+verbatim (`<3-6 words, for a filename>` → `3-6 words`), truncated to a
+leading fragment, or paraphrased with digits swapped in for spelled-out
+numbers (LONG's `one to two sentences` → `1-2 sentences`). Left
+unfiltered this reads as real content and, worse, KEYWORDS's own
+placeholder text happens to satisfy `_looks_like_keyword_list()`'s
+comma-list heuristic, so an echoed KEYWORDS placeholder used to get
+comma-split into garbage keyword entries. `parse_caption_sections()`
+runs every section through `inference._looks_like_placeholder_echo()`
+first — matched against `inference._SHORT_PLACEHOLDER` /
+`_LONG_PLACEHOLDER` / `_KEYWORDS_PLACEHOLDER` (kept in sync by hand with
+`config.METADATA_PROMPT`/`config.METADATA_BACKFILL_PROMPT`'s placeholder
+text — no shared constant, since the prompt wraps these across lines for
+readability while matching works against the whitespace-collapsed form)
+as an exact match or a truncated prefix, plus `inference._COUNT_ECHO_RE`
+for the digit-paraphrase case, which has no literal substring in common
+with the spelled-out placeholder text — and treats a match as an absent
+section, feeding the same SHORT/KEYWORDS fallback chains above.
 
 ### Field Mapping
 

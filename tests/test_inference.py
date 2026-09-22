@@ -2,7 +2,12 @@ import pytest
 from huggingface_hub.errors import LocalEntryNotFoundError
 
 import slate.inference as inference
-from slate.inference import CaptionSections, parse_caption_sections
+from slate.inference import (
+    CaptionSections,
+    derive_short_from_keywords,
+    derive_short_from_long,
+    parse_caption_sections,
+)
 
 
 class FakeGenerationResult:
@@ -293,6 +298,94 @@ class TestParseCaptionSections:
     def test_empty_input_degrades_gracefully(self):
         result = parse_caption_sections("")
         assert result == CaptionSections(short=None, long=None, keywords=None)
+
+    def test_lowercase_markers_still_parse(self):
+        # A quantized model observed emitting "short:"/"long:"/"keywords:"
+        # instead of the prompted uppercase form -- previously this missed
+        # every marker entirely, leaving `.short` None and letting the
+        # full raw multi-section text leak into the caller's filename.
+        raw = (
+            "short: red kayak at sunset\n"
+            "long: A red kayak drifts across a calm lake at sunset.\n"
+            "keywords: kayak, lake, sunset"
+        )
+        result = parse_caption_sections(raw)
+        assert result == CaptionSections(
+            short="red kayak at sunset",
+            long="A red kayak drifts across a calm lake at sunset.",
+            keywords=["kayak", "lake", "sunset"],
+        )
+
+    def test_mixed_case_markers_still_parse(self):
+        raw = "Short: red kayak\nLong: A red kayak drifts across a calm lake."
+        result = parse_caption_sections(raw)
+        assert result.short == "red kayak"
+        assert result.long == "A red kayak drifts across a calm lake."
+
+    def test_verbatim_placeholder_echo_treated_as_absent(self):
+        # The model echoed the prompt's own <placeholder> text back for
+        # every section instead of filling any of them in.
+        raw = (
+            "SHORT: <3-6 words, for a filename>\n"
+            "LONG: <one to two sentences>\n"
+            "KEYWORDS: <6-10 comma-separated single words or short phrases "
+            "naming subjects, actions, and setting -- no articles, no full "
+            "sentences>"
+        )
+        result = parse_caption_sections(raw)
+        assert result.short is None
+        assert result.long is None
+        assert result.keywords is None
+
+    def test_truncated_placeholder_echo_treated_as_absent(self):
+        # Observed real-world case: the model echoes only a leading
+        # fragment of the placeholder, with the brackets already gone.
+        raw = "SHORT: 3-6 words\nLONG: a serene forest path with trees"
+        result = parse_caption_sections(raw)
+        assert result.short is None
+        assert result.long == "a serene forest path with trees"
+
+    def test_paraphrased_count_echo_treated_as_absent(self):
+        # Observed real-world case: LONG's placeholder ("one to two
+        # sentences") echoed back with digits substituted in, which has no
+        # literal substring in common with the placeholder text itself.
+        raw = "SHORT: 3-6 words\nLONG: 1-2 sentences\nKEYWORDS: vineyard, trees, fog"
+        result = parse_caption_sections(raw)
+        assert result.short is None
+        assert result.long is None
+        assert result.keywords == ["vineyard", "trees", "fog"]
+
+    def test_real_content_resembling_placeholder_prefix_is_not_over_matched(self):
+        # Sanity check: ordinary short captions aren't accidentally caught
+        # by the placeholder-prefix check just because of shared words.
+        raw = "SHORT: two boats on a lake\nLONG: Two boats drift on a lake."
+        result = parse_caption_sections(raw)
+        assert result.short == "two boats on a lake"
+        assert result.long == "Two boats drift on a lake."
+
+
+class TestDeriveShortFromLong:
+    def test_takes_first_max_words(self):
+        long_caption = "A red kayak drifts across a calm lake at sunset."
+        assert derive_short_from_long(long_caption, max_words=6) == (
+            "A red kayak drifts across a"
+        )
+
+    def test_shorter_than_max_words_is_unchanged(self):
+        assert derive_short_from_long("A red kayak.", max_words=6) == "A red kayak."
+
+
+class TestDeriveShortFromKeywords:
+    def test_takes_first_max_keywords(self):
+        keywords = ["vineyard", "trees", "fog", "rows", "green"]
+        assert (
+            derive_short_from_keywords(keywords, max_keywords=3) == "vineyard trees fog"
+        )
+
+    def test_fewer_than_max_keywords_is_unchanged(self):
+        assert derive_short_from_keywords(["vineyard", "fog"], max_keywords=4) == (
+            "vineyard fog"
+        )
 
 
 class TestCleanKeyword:
