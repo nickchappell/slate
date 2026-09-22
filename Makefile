@@ -1,7 +1,7 @@
 .PHONY: help install sync lint lint-fix format format-check fix test test-unit test-integration \
 	test-all coverage coverage-report check audit run model-update-check build install-tool \
-	reinstall-tool uninstall-tool update outdated lock lock-check bump-version github-release \
-	create-release clean
+	reinstall-tool uninstall-tool update outdated lock lock-check version bump-version \
+	github-release create-release clean
 
 # Used by bump-version; override with e.g. `make bump-version PART=minor`.
 PART ?= patch
@@ -64,6 +64,8 @@ help:
 	@printf "                   $(GREEN)e.g. make lock$(RESET)\n"
 	@printf "  $(CYAN)lock-check$(RESET)       Verify uv.lock is up to date with pyproject.toml\n"
 	@printf "                   $(GREEN)e.g. make lock-check$(RESET)\n"
+	@printf "  $(CYAN)version$(RESET)          Print the current version from pyproject.toml (read-only)\n"
+	@printf "                   $(GREEN)e.g. make version$(RESET)\n"
 	@printf "  $(CYAN)bump-version$(RESET)     Bump pyproject.toml version, commit, and tag it\n"
 	@printf "                   $(YELLOW)(PART=patch|minor|major, default patch)$(RESET)\n"
 	@printf "                   $(GREEN)e.g. make bump-version PART=minor$(RESET)\n"
@@ -147,6 +149,9 @@ lock:
 
 lock-check:
 	uv lock --check
+
+version:
+	@uv version --short
 
 bump-version:
 	@if [ -n "$$(git status --porcelain)" ]; then \
