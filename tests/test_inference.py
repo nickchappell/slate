@@ -250,6 +250,27 @@ class TestParseCaptionSections:
         result = parse_caption_sections(raw)
         assert result.keywords == ["train", "urban setting", "graffiti", "flag"]
 
+    def test_whole_list_quotes_are_stripped(self):
+        # The model sometimes wraps the *entire* comma list in a single
+        # pair of quotes rather than quoting each keyword -- naive
+        # per-keyword stripping (only matched-quote-pair-per-entry) leaves
+        # the quotes stuck to the first/last keyword after the comma split
+        # (e.g. `"Historic Building` / `Exterior"` verbatim in JSON output)
+        # -- see the real-world example this was reported against.
+        raw = (
+            "SHORT: historic building\n"
+            "LONG: A historic building with columns and large windows.\n"
+            'KEYWORDS: "Historic Building, Columns, Large Windows, Trees, Exterior"'
+        )
+        result = parse_caption_sections(raw)
+        assert result.keywords == [
+            "Historic Building",
+            "Columns",
+            "Large Windows",
+            "Trees",
+            "Exterior",
+        ]
+
     def test_missing_keywords_falls_back_to_derivation_from_long(self):
         raw = "SHORT: red kayak\nLONG: A red kayak drifts across a calm lake."
         result = parse_caption_sections(raw)
@@ -410,6 +431,32 @@ class TestCleanKeyword:
     def test_lone_quote_character_is_not_stripped_to_empty(self):
         # len < 2, so the "surrounding pair" check can't apply.
         assert inference._clean_keyword('"') == '"'
+
+
+class TestStripWholeListQuotes:
+    def test_strips_quotes_wrapping_the_entire_list(self):
+        raw = '"Historic Building, Columns, Large Windows, Trees, Exterior"'
+        assert inference._strip_whole_list_quotes(raw) == (
+            "Historic Building, Columns, Large Windows, Trees, Exterior"
+        )
+
+    def test_leaves_per_keyword_quoting_untouched(self):
+        # Each keyword is individually quoted -- both the first and last
+        # tokens are already a balanced quote pair on their own, so this
+        # must be left for _clean_keyword() to strip per-entry, not
+        # treated as one quote pair wrapping the whole string.
+        raw = '"train", "urban setting", "graffiti", "flag"'
+        assert inference._strip_whole_list_quotes(raw) == raw
+
+    def test_leaves_unquoted_list_untouched(self):
+        assert inference._strip_whole_list_quotes("train, urban setting") == (
+            "train, urban setting"
+        )
+
+    def test_single_quoted_keyword_no_comma_is_left_for_clean_keyword(self):
+        # No comma at all -- first and last token are the same (balanced)
+        # string, so this is per-entry quoting of a single keyword.
+        assert inference._strip_whole_list_quotes('"train"') == '"train"'
 
 
 class TestDeriveKeywordsFromLong:

@@ -742,6 +742,23 @@ for the digit-paraphrase case, which has no literal substring in common
 with the spelled-out placeholder text — and treats a match as an absent
 section, feeding the same SHORT/KEYWORDS fallback chains above.
 
+**KEYWORDS quoting.** The model quotes its comma list two different ways
+despite the prompt asking for a bare list, and each needs different
+handling. Per-keyword quoting (`KEYWORDS: "train", "urban setting"`) is
+stripped per-entry, after the comma split, by `inference._clean_keyword()`
+(a single matching `"`/`'` pair, same idea as `normalize_caption()`'s
+whole-string strip). Whole-list quoting (`KEYWORDS: "train, urban
+setting"` — one pair wrapping the *entire* list) has to be stripped
+*before* the comma split, by `inference._strip_whole_list_quotes()`, or
+the stray quote is left stuck to the first/last keyword instead (verbatim
+`\"Historic Building` / `Exterior\"` in JSON output — the bug this was
+written against). The two can't share one code path: a per-keyword-quoted
+list also happens to start and end with a quote character overall, purely
+because its first/last *keyword* does. `_strip_whole_list_quotes()`
+disambiguates by checking whether the first/last comma-separated token is
+already a self-balanced quote pair (per-keyword quoting — leave it alone)
+or not (whole-list quoting — strip the outer pair).
+
 ### Field Mapping
 
 | Generation | Classic (`ItemList`) | `Keys` (quicktime.\*) | XMP | List-type? |

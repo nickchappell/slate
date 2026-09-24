@@ -307,16 +307,53 @@ def _looks_like_keyword_list(text: str) -> bool:
     return not any(text.rstrip().endswith(p) for p in (".", "!", "?"))
 
 
-def _clean_keyword(raw: str) -> str:
-    # The model sometimes wraps each keyword in its own quote marks (e.g.
-    # `KEYWORDS: "train", "urban setting"`) even though the prompt asks for
-    # a bare comma list -- strip a single matching pair of surrounding
-    # quotes per keyword, same idea as normalize_caption()'s whole-string
-    # quote strip, then re-trim in case there was whitespace inside them.
-    text = raw.strip()
+def _strip_surrounding_quotes(text: str) -> str:
+    # Strips a single matching pair of surrounding quote characters, if
+    # present, then re-trims in case there was whitespace inside them --
+    # same idea as filenames.normalize_caption()'s whole-string quote
+    # strip.
+    text = text.strip()
     if len(text) >= 2 and text[0] == text[-1] and text[0] in "\"'":
         text = text[1:-1].strip()
     return text
+
+
+def _clean_keyword(raw: str) -> str:
+    # The model sometimes wraps each keyword in its own quote marks (e.g.
+    # `KEYWORDS: "train", "urban setting"`) even though the prompt asks
+    # for a bare comma list -- strip that per-entry.
+    return _strip_surrounding_quotes(raw)
+
+
+def _strip_whole_list_quotes(text: str) -> str:
+    # The model sometimes wraps the *entire* KEYWORDS list in a single
+    # pair of quotes (e.g. `KEYWORDS: "train, urban setting"`) rather than
+    # quoting each keyword. Splitting that on commas before stripping
+    # leaves a stray quote stuck to the first/last keyword (verbatim
+    # `\"Historic Building` / `Exterior\"` in JSON output) since neither
+    # is individually a matched quote pair -- see the real-world example
+    # this was reported against.
+    #
+    # Distinguishing this from legitimate per-keyword quoting (which
+    # _clean_keyword handles per-entry, after splitting) matters: a
+    # per-keyword-quoted list also happens to start and end with a quote
+    # character overall, purely because its first/last *keyword* does.
+    # The signal used here: in the whole-list case, the first token
+    # (before the first comma) opens with a quote it doesn't itself
+    # close, and the last token closes with a quote it doesn't itself
+    # open. A quoted first/last keyword is balanced on its own -- leave
+    # those alone entirely and let _clean_keyword handle them per-entry.
+    if len(text) < 2 or text[0] not in "\"'" or text[-1] != text[0]:
+        return text
+    quote = text[0]
+    segments = text.split(",")
+    first = segments[0].strip()
+    last = segments[-1].strip()
+    first_is_balanced = len(first) >= 2 and first[0] == quote and first[-1] == quote
+    last_is_balanced = len(last) >= 2 and last[0] == quote and last[-1] == quote
+    if first_is_balanced or last_is_balanced:
+        return text
+    return text[1:-1].strip()
 
 
 def derive_short_from_long(long_caption: str, max_words: int = 6) -> str:
@@ -384,6 +421,8 @@ def parse_caption_sections(raw_text: str) -> CaptionSections:
 
     keywords: list[str] | None
     raw_keywords = sections.get("keywords")
+    if raw_keywords:
+        raw_keywords = _strip_whole_list_quotes(raw_keywords)
     if (
         raw_keywords
         and not _looks_like_placeholder_echo("keywords", raw_keywords)
