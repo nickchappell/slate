@@ -27,6 +27,7 @@ from slate.filenames import (
 from slate.inference import (
     MAX_CAPTION_TOKENS_WITH_METADATA,
     check_for_model_updates,
+    derive_keywords_from_short,
     derive_short_from_keywords,
     derive_short_from_long,
     generate_caption,
@@ -686,6 +687,26 @@ def run_phase1(
 
             build_montage(frame_paths, tmp_frame_path)
         caption = truncate_caption(normalize_caption(short_text))
+
+        # Guard against a partially-parsed response leaving some
+        # *persisted* fields None while others hold real content --
+        # rename.py/review_sync.py treat "long_caption is None or
+        # keywords is None" as "never captioned" and skip --add-metadata
+        # embedding entirely for that file, even though real captioning
+        # data exists (reported real-world case: SHORT + KEYWORDS parsed
+        # fine, only LONG was an echoed <placeholder>, so a real caption
+        # never got embedded on rename). Backfill whichever of
+        # long_caption/keywords is still missing from `caption` (the
+        # final short caption -- same value stored as short_caption
+        # below) rather than let one missing section blank out the whole
+        # entry. Skipped when `caption` itself is empty (captioning
+        # produced nothing usable at all) so that case still skips
+        # embedding cleanly instead of writing blank metadata.
+        if add_metadata and caption:
+            if long_caption is None:
+                long_caption = caption
+            if keywords is None:
+                keywords = derive_keywords_from_short(caption)
 
         new_stem = assemble_stem(
             original_stem=group.source_file.stem,

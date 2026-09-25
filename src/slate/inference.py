@@ -356,7 +356,7 @@ def _strip_whole_list_quotes(text: str) -> str:
     return text[1:-1].strip()
 
 
-def derive_short_from_long(long_caption: str, max_words: int = 6) -> str:
+def derive_short_from_long(long_caption: str, max_words: int = 5) -> str:
     """Fallback for when SHORT is missing but LONG parsed successfully
     (e.g. the model skipped SHORT outright): the first max_words words of
     LONG, not the full raw multi-section response -- see cli.py's caller.
@@ -371,6 +371,30 @@ def derive_short_from_keywords(keywords: list[str], max_keywords: int = 4) -> st
     max_keywords keywords, not the full raw multi-section response -- see
     cli.py's caller."""
     return " ".join(keywords[:max_keywords])
+
+
+_KEYWORD_WORD_RE = re.compile(r"[A-Za-z0-9']+")
+
+
+def derive_keywords_from_short(short_caption: str, max_keywords: int = 10) -> list[str]:
+    """Fallback for when KEYWORDS is missing but SHORT is available (either
+    parsed directly, or itself already derived via derive_short_from_long/
+    derive_short_from_keywords above): regex-tokenize SHORT into individual
+    words (lowercased, deduped, order-preserved, capped at max_keywords) --
+    see cli.py's caller. Deliberately a plain word split with no stopword
+    filtering, unlike _derive_keywords_from_long -- SHORT is already a
+    terse phrase, not prose, by the time this runs."""
+    words = _KEYWORD_WORD_RE.findall(short_caption.lower())
+    keywords: list[str] = []
+    seen: set[str] = set()
+    for word in words:
+        if word in seen:
+            continue
+        seen.add(word)
+        keywords.append(word)
+        if len(keywords) >= max_keywords:
+            break
+    return keywords
 
 
 def _derive_keywords_from_long(long_caption: str, max_keywords: int = 10) -> list[str]:

@@ -4,6 +4,7 @@ from huggingface_hub.errors import LocalEntryNotFoundError
 import slate.inference as inference
 from slate.inference import (
     CaptionSections,
+    derive_keywords_from_short,
     derive_short_from_keywords,
     derive_short_from_long,
     parse_caption_sections,
@@ -386,6 +387,10 @@ class TestParseCaptionSections:
 
 
 class TestDeriveShortFromLong:
+    def test_default_caps_at_five_words(self):
+        long_caption = "A red kayak drifts across a calm lake at sunset."
+        assert derive_short_from_long(long_caption) == "A red kayak drifts across"
+
     def test_takes_first_max_words(self):
         long_caption = "A red kayak drifts across a calm lake at sunset."
         assert derive_short_from_long(long_caption, max_words=6) == (
@@ -407,6 +412,46 @@ class TestDeriveShortFromKeywords:
         assert derive_short_from_keywords(["vineyard", "fog"], max_keywords=4) == (
             "vineyard fog"
         )
+
+
+class TestDeriveKeywordsFromShort:
+    def test_splits_on_words(self):
+        assert derive_keywords_from_short("vineyard trees fog") == [
+            "vineyard",
+            "trees",
+            "fog",
+        ]
+
+    def test_lowercases(self):
+        assert derive_keywords_from_short("Vineyard Trees") == ["vineyard", "trees"]
+
+    def test_strips_punctuation_between_words(self):
+        assert derive_keywords_from_short("vineyard, trees, fog.") == [
+            "vineyard",
+            "trees",
+            "fog",
+        ]
+
+    def test_dedupes_preserving_order(self):
+        assert derive_keywords_from_short("fog fog trees fog") == ["fog", "trees"]
+
+    def test_caps_at_max_keywords(self):
+        assert derive_keywords_from_short("a b c d e", max_keywords=3) == [
+            "a",
+            "b",
+            "c",
+        ]
+
+    def test_no_stopword_filtering(self):
+        # Unlike _derive_keywords_from_long, this is a plain word split --
+        # SHORT is already terse by the time this runs.
+        assert derive_keywords_from_short("a train in the city") == [
+            "a",
+            "train",
+            "in",
+            "the",
+            "city",
+        ]
 
 
 class TestCleanKeyword:

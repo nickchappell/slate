@@ -759,6 +759,29 @@ disambiguates by checking whether the first/last comma-separated token is
 already a self-balanced quote pair (per-keyword quoting — leave it alone)
 or not (whole-list quoting — strip the outer pair).
 
+**Null-guarding the persisted fields.** `rename.py`/`review_sync.py` both
+treat `long_caption is None or keywords is None` as "this file was never
+captioned" and skip `--add-metadata` embedding/reconciliation for it
+entirely. That's the right call when captioning genuinely never ran, but
+it also fired on a file that *was* captioned whenever only one section
+came back unusable (reported real-world case: SHORT and KEYWORDS parsed
+as real content, only LONG was an echoed `<placeholder>` — a real caption
+silently never got embedded on rename, with no error surfaced anywhere).
+`cli.py`'s Phase 1 caller closes this gap once `caption` (the final,
+fully-resolved short caption) is computed, backfilling whichever of
+`long_caption`/`keywords` is still `None` from it — never from the raw
+per-field text, so this always runs after SHORT's own fallback chain
+above has already resolved: `long_caption` missing → `caption` itself
+(`inference.derive_short_from_long()`'s 5-word cap already applies
+upstream, from LONG, if SHORT was what was missing); `keywords` missing →
+`inference.derive_keywords_from_short(caption)`, a plain regex word-split
+(lowercased, deduped, capped at 10 words) — deliberately no stopword
+filtering, unlike `_derive_keywords_from_long`, since SHORT is already a
+terse phrase rather than prose by the time this runs. Guarded on
+`caption` being non-empty first, so the genuinely-nothing-parsed case
+(raw, unstructured model output that doesn't even yield a usable SHORT)
+still skips cleanly instead of embedding blank metadata.
+
 ### Field Mapping
 
 | Generation | Classic (`ItemList`) | `Keys` (quicktime.\*) | XMP | List-type? |

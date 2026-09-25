@@ -1213,6 +1213,46 @@ class TestRunPhase1AddMetadata:
         assert entry.keywords == ["kayak", "lake", "red"]
         assert entry.captioned_at is not None
 
+    def test_echoed_long_placeholder_backfills_from_short_not_left_null(
+        self, tmp_path, monkeypatch
+    ):
+        # Reported real-world case: SHORT and KEYWORDS parsed as real
+        # content, only LONG was an echoed <placeholder> (paraphrased --
+        # "1-2 sentences" for LONG's "one to two sentences"). Leaving
+        # long_caption null here used to make rename.py/review_sync.py
+        # treat the file as if it had never been captioned at all --
+        # --add-metadata embedding was silently skipped on rename despite
+        # real short_caption/keywords data existing.
+        source = touch(tmp_path / "a.MOV")
+        self._stub_pipeline(
+            monkeypatch,
+            "SHORT: vineyard trees fog morning\n"
+            "LONG: 1-2 sentences\n"
+            "KEYWORDS: vineyard, trees, fog, morning",
+        )
+
+        review_dir = tmp_path / "review"
+        mappings_path = review_dir / "rename_mappings.json"
+        _all, new_entries, _skipped = cli.run_phase1(
+            [source],
+            tmp_path,
+            mappings_path,
+            review_dir,
+            model="fake-model",
+            prompt="fake-plain-prompt",
+            prepend=False,
+            prefix="",
+            suffix="",
+            max_file_name_length=255,
+            num_frames_for_caption=3,
+            add_metadata=True,
+        )
+
+        entry = new_entries[0]
+        assert entry.short_caption == "vineyard trees fog morning"
+        assert entry.long_caption == "vineyard trees fog morning"
+        assert entry.keywords == ["vineyard", "trees", "fog", "morning"]
+
     def test_echoed_short_placeholder_falls_back_to_long_derived_stem(
         self, tmp_path, monkeypatch
     ):
@@ -1246,7 +1286,7 @@ class TestRunPhase1AddMetadata:
 
         entry = new_entries[0]
         assert "3-6 words" not in entry.new_stem
-        assert entry.new_stem == "a a serene forest path with trees"
+        assert entry.new_stem == "a a serene forest path with"
         assert (
             entry.long_caption == "a serene forest path with trees and bushes nearby."
         )
@@ -1281,8 +1321,43 @@ class TestRunPhase1AddMetadata:
         )
 
         entry = new_entries[0]
-        assert entry.long_caption is None
+        # long_caption is backfilled from the resolved short caption --
+        # never left None when *something* real was captioned, since
+        # rename.py treats a None long_caption/keywords as "never
+        # captioned" and skips --add-metadata embedding for the file.
+        assert entry.long_caption == "vineyard trees fog"
         assert entry.new_stem == "a vineyard trees fog"
+
+    def test_wholly_empty_response_leaves_metadata_fields_none(
+        self, tmp_path, monkeypatch
+    ):
+        # Nothing parsed at all (not even unstructured raw text) -- the
+        # null-guard backfill must not manufacture blank long_caption/
+        # keywords from an empty short caption; this should still skip
+        # --add-metadata embedding cleanly, same as before the backfill.
+        source = touch(tmp_path / "a.MOV")
+        self._stub_pipeline(monkeypatch, "   ")
+
+        review_dir = tmp_path / "review"
+        mappings_path = review_dir / "rename_mappings.json"
+        _all, new_entries, _skipped = cli.run_phase1(
+            [source],
+            tmp_path,
+            mappings_path,
+            review_dir,
+            model="fake-model",
+            prompt="fake-plain-prompt",
+            prepend=False,
+            prefix="",
+            suffix="",
+            max_file_name_length=255,
+            num_frames_for_caption=3,
+            add_metadata=True,
+        )
+
+        entry = new_entries[0]
+        assert entry.long_caption is None
+        assert entry.keywords is None
 
     def test_add_metadata_false_leaves_metadata_fields_none(
         self, tmp_path, monkeypatch
