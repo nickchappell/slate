@@ -28,6 +28,7 @@ from slate.mappings import (
 )
 from slate.metadata import embed_metadata, read_existing_metadata
 from slate.pairing import build_groups, validate_media_files
+from slate.rotate import NEEDS_FIX_LABEL, read_rotation_state
 
 # See "Backfill mode: embedding metadata into already-renamed files" in
 # spec/metadata-embedding.md. Standalone mode, entirely separate from the
@@ -119,6 +120,25 @@ def run_backfill_generate(
             continue
 
         assert group.source_file is not None
+
+        # Best-effort, mirrors cli.run_phase1's same check -- see its
+        # comment for why a missing Bento4 doesn't turn into a new hard
+        # dependency here.
+        rotation_state = read_rotation_state(group.source_file)
+        if rotation_state is not None and rotation_state.label == NEEDS_FIX_LABEL:
+            error_message = (
+                f"{group.source_file.name} has a 90-degree-clockwise "
+                "rotation matrix -- run it through --rotate first "
+                f"(slate --rotate {group.source_file.name})"
+            )
+            entry = MetadataChangeEntry(
+                status="error", current_files=current_files, error=error_message
+            )
+            new_entries.append(entry)
+            all_entries.append(entry)
+            output.error(f"{' / '.join(current_files)}: {error_message}")
+            continue
+
         # No assemble_stem/disambiguation in this mode -- the file is
         # already named its final name, and (unlike Phase 1's preview
         # JPEGs) two groups can never collide on this name, since

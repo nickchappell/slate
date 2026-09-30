@@ -1070,6 +1070,156 @@ separately in the completion summary. Archives the mapping file to
 `applied_metadata_changes_<timestamp>.json` on completion, mirroring the
 `applied_renames_<timestamp>.json` convention.
 
+## Rotation Correction: `--rotate`
+
+Standalone mode (`rotate.py`), independent of the three main phases:
+`--rotate FILE [FILE ...] [--dry-run]`. Fixes a clip whose video track
+carries a 90-degree-clockwise display rotation matrix — `ffprobe`'s
+`stream_side_data=rotation` reporting `-90` — back to landscape playback.
+Some phone camera apps (confirmed against Final Cut Camera in particular)
+write this matrix on some clips; slate's own frame extraction/captioning
+pipeline doesn't reliably respect it the way QuickTime/VLC do, so a
+mis-rotated clip needs the container fixed before it's captioned.
+
+**Why not just remux it with ffmpeg.** The naive fix — `ffmpeg -i in.mov -c
+copy -display_rotation:v 0 out.mov` — was tried and rejected: even a pure
+stream-copy remux that only touches display-rotation side data forces
+ffmpeg through its generic muxer for every track, which silently
+dummy-values (or retags) any track type it doesn't fully understand.
+Verified concretely on a real Final Cut Camera fixture with no `mebx`
+track at all: the remux changed the audio track's codec tag from `lpcm` to
+`sowt`. This is the same class of bug documented in
+`spec/metadata-write-corruption.md` for `--add-metadata`'s ffmpeg fallback
+— not `mebx`-specific, just "ffmpeg's muxer can't be trusted to round-trip
+an exotic container's tracks it doesn't need to touch."
+
+**Why not GPAC's `MP4Box -mx` either**, despite it being the tool an
+earlier AppleScript-based version of this workflow used (via
+`ffprobe`+`MP4Box` shelled out from Keyboard Maestro) to apply the same
+fix outside slate. Tried directly against the Final Cut Camera fixture
+(which has no `mebx` track, so this comparison doesn't speak to `MP4Box`'s
+behavior there) for comparison: `MP4Box -mx <trackID>=<matrix>` is
+*closer* — audio came through with a matching decoded MD5 — but it's
+still not byte-perfect. It silently shrank the video
+track's `stsd` by 4 bytes, normalizing a non-standard-but-harmless 82-byte
+`hvc1` sample-entry header down to the ISO spec's standard 78 bytes during
+its own internal remux/interleave pass (confirmed via `mp4dump`:
+`MP4Box`'s output prints "Unknown box type `logs` in parent `hvc1`" and
+that atom does survive, but 4 bytes elsewhere in the fixed header don't).
+Also not free of new dependencies: GPAC (`brew install gpac`, `mp4box` is
+an alias) pulls in 14 additional Homebrew packages, versus zero for the
+approach actually used.
+
+**What's actually used: Bento4's `mp4extract`/`mp4edit --replace`** — the
+exact same atom-surgery tool slate already depends on for
+`--add-metadata`/`--metadata-backfill`'s `mebx`-repair fallback (see
+"Writing Mechanism" above and `spec/metadata-write-corruption.md`), so
+`--rotate` adds no new dependency. The fix touches exactly one atom:
+
+1. `mp4extract "moov/trak[N]/tkhd" in.mov tkhd.bin` pulls the video
+   track's `tkhd` out standalone (`N` found by scanning `mp4dump --format
+   json`'s `moov.trak[*].mdia.hdlr.handler_type` for `"vide"`, not assumed
+   to be `trak[0]`).
+2. The 36-byte `matrix` field is patched in place, in Python, at a fixed
+   byte offset computed from the box's `version` field (`48` for version
+   0, `60` for version 1 — ISO/IEC 14496-12's `tkhd` layout; only version 0
+   has been exercised against a real fixture so far), to the identity
+   matrix (`a=1,b=0,c=0,d=1`, i.e. `65536,0,0, 0,65536,0, 0,0,1073741824`
+   as the raw 16.16-fixed-point big-endian ints `tkhd` stores).
+3. `mp4edit --replace "moov/trak[N]/tkhd:tkhd.bin" in.mov out.mov` splices
+   it back in — Bento4 recalculates every ancestor box's size field itself,
+   and (unlike the two alternatives above) never touches any atom outside
+   the one path named.
+
+**Verified empirically**, not just reasoned about, against three real
+fixtures (Final Cut Camera H.265, and — since `--rotate` must also be safe
+on Kino recordings, the source of the original `mebx`-corruption bug — Kino
+H.265 and Kino ProRes, both carrying a real `mebx` track): decoded video
+and decoded audio (`ffmpeg -f md5`, comparing against the original with
+`-noautorotate` so the comparison is apples-to-apples on raw pixels) are
+bit-for-bit identical before and after; the video track's own `stsd`
+(including an unrecognized vendor `logs` box — Apple's "Log" color-profile
+marker, present on both H.265 fixtures' `hvc1` entry regardless of source
+app, tied to the Log gamma profile rather than to Final Cut Camera
+specifically; absent from the ProRes fixture, whose `apcn` entry doesn't
+carry HEVC config boxes at all), the `tmcd` track, and — critically — the
+`mebx` track's
+`hdlr`/`stsd`/`stts` and its actual raw sample payload all come through
+byte-for-byte unchanged on every fixture. `rotate_file()` re-reads the
+patched output's own rotation state before committing anything, as a
+belt-and-suspenders check against a future regression in this logic
+silently producing a file that merely *looks* successful (`mp4edit` exited
+0) without actually being fixed.
+
+**Scope: today, this only detects and corrects the exact `-90` state.**
+`read_rotation_state()` classifies a clip's matrix against the four
+standard QuickTime rotation matrices (identity/`-90`/`90`/`180`), but
+`rotate_file()` only acts on `-90` — every other state (already correct,
+`90`, `180`, or an unrecognized matrix) errors out (or, under `--dry-run`,
+is reported as skipped) rather than being auto-corrected. This is
+deliberate, matching how far real footage has actually exercised this: the
+three fixtures above are the only real-world case seen so far.
+Auto-detecting/normalizing every possible rotation state generally is a
+known future improvement, not attempted here — see "Future Improvements."
+
+**Confirmation prompt**: `run_rotate()` previews every file first — each
+one gets its own dry-run-style check and status line, printed before
+anything is written — then, unless `--dry-run` or `--yes`/`-y` is passed,
+asks a single Y/N question before actually rotating anything (mirroring
+Phase 2/3's rename confirmation). If nothing would be rotated, no prompt
+is shown at all; declining leaves every file untouched. Like
+`backfill.py`, `--rotate` owns this prompt itself (`from rich.prompt
+import Confirm` inside `rotate.py`) rather than delegating it back to
+`cli.py` — the established pattern for a standalone mode, not specific to
+this feature.
+
+**File handling**: the original is moved into an `original_unrotated/`
+subfolder next to it (created on first use, one per directory processed —
+not a single global folder), and the corrected file takes its place at the
+exact original path/name, so nothing downstream (a shell script, a
+half-finished `--dry-run` review, Finder) needs to learn a new filename.
+Refuses to run (per-file error, not aborting the whole batch) if
+`original_unrotated/<name>` already exists, rather than silently
+overwriting a previously preserved original. Re-running `--rotate` against
+an already-fixed file is a safe no-op: its matrix is identity now, which
+isn't `-90`, so it's reported as skipped/errored exactly like any other
+file that was never mis-rotated to begin with.
+
+**Undo script**: `run_rotate()` writes `undo_rotations_<timestamp>.sh` to
+the current directory after a successful (non-`--dry-run`) batch —
+`--skip-generate-undo-script` disables it, same flag the main rename flow
+uses. Unlike `rename.py`'s undo script, this one never shells out to
+`ffmpeg`/Bento4 to reverse anything: since the true original was moved
+into `original_unrotated/` untouched rather than discarded, undoing is
+two plain `mv -n --` lines per file — move the corrected file aside to
+`<name>.rotated-backup` (left on disk, not deleted, since this script
+should never delete data on its own) so the destination is vacated, then
+move the preserved original back into place. Each pair is preceded by an
+explicit `[ -f <preserved> ]` guard, rather than letting a missing
+`original_unrotated/` (deleted by hand, or already restored by an earlier
+run of the same script) surface as a bare `mv: No such file or directory`
+— the guard names the actual cause and fails before the *first* `mv` of
+that pair runs, so a missing original can never leave the corrected file
+renamed aside with nothing to restore in its place. Verified end to end
+against a real fixture: running the generated script restores a
+byte-for-byte identical copy of the pre-`--rotate` file, and separately,
+that deleting `original_unrotated/` first makes the script exit 1 with a
+clear message while leaving the corrected file completely untouched.
+
+**Interaction with the three main phases**: `run_phase1()` (both
+`--dry-run` and the captioning half of `--process-and-rename`) and
+`backfill.run_backfill_generate()` both call `read_rotation_state()` on the
+source file before extracting frames, and turn a detected `-90` into an
+error entry telling the user to run `--rotate` first, rather than
+captioning (and, worse, renaming) off a sideways-decoded frame. This check
+is deliberately best-effort, not a new hard dependency on Bento4 for plain
+captioning: `read_rotation_state()` returns `None` (never raises) whenever
+Bento4 isn't installed, mp4dump can't parse the file, or no video track is
+found, and a `None` result is treated as "can't tell, proceed as before"
+— only `--rotate` itself (via `preflight.run_metadata_tool_checks()`, the
+same gate `--add-metadata`/`--metadata-backfill` use) makes Bento4 a hard
+requirement.
+
 ## Workflow Modes: Dry-Run → Rename, or Combined
 
 Rationale: decouple the slow/expensive step (decode + inference) from the
@@ -1550,6 +1700,31 @@ shipping.
    workaround is scoping `--input-dir`/`--input-files` to only the new
    files per run, or moving already-processed footage out of the watched
    directory between runs.
+
+2. **Generalized ProRes/H.265 support from Final Cut Camera.** Apple's
+   Final Cut Camera iOS app can deliver footage in either ProRes or H.265
+   (HEVC), and neither has specifically been exercised against the
+   extraction fallback ladder (`extraction.py`) or `pairing.py`'s
+   `ffprobe` duration/frame-count checks in Final Cut Camera's own output
+   -- today's ladder was built and tested against other apps' ProRes/
+   ProRes RAW and standard H.264 output. Needs additional real-footage
+   testing to confirm `ffmpeg` frame extraction and `build_montage()`
+   behave correctly against both of Final Cut Camera's codec options
+   (color space, container quirks, any HDR metadata it attaches), and
+   likely tweaks to the ladder or pairing checks if either exposes those
+   differently than the codecs already covered. Once working, the goal is
+   to generalize the fix rather than special-case it to Final Cut Camera:
+   fold it into the same extraction/pairing flow already shared across
+   camera apps, porting the behavior over if Final Cut Camera turns out to
+   need its own branch today.
+
+3. **Auto-detecting/normalizing every rotation state, not just `-90`.**
+   `--rotate` (see "Rotation Correction" above) landed, but deliberately
+   scoped to the one state real footage has actually exercised so far
+   (`ffprobe` rotation `-90`, i.e. 90-degree-clockwise). A file already at
+   `90`/`180`, or carrying a non-standard/unrecognized matrix, is left
+   alone today rather than normalized to `0`. Broadening that is future
+   work, not yet needed by any real fixture on hand.
 
 ## Configuration
 

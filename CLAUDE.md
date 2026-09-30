@@ -110,6 +110,28 @@ with a human review checkpoint in between:
   mutually exclusive with the rename-flow flags above. Retrofits metadata
   onto files a past run already renamed, via its own
   `review/metadata_changes.json` generate/apply cycle; no renaming.
+- **`--rotate FILE [FILE ...]`** — standalone mode (see `rotate.py`), takes
+  its own file list rather than `--input-dir`/`--input-files`. Fixes a clip
+  whose video track carries a 90-degree-clockwise rotation matrix
+  (`ffprobe`'s `rotation=-90`) back to landscape, via a lossless Bento4
+  atom splice — no re-encode, every other track left untouched. Every file
+  is checked and its status printed before anything is written, then
+  (unless `--dry-run` or `--yes`/`-y`) a single Y/N prompt confirms before
+  rotating any of them — mirrors Phase 2/3's rename confirmation, owned by
+  `rotate.py` itself rather than `cli.py` (same pattern as `backfill.py`).
+  Combine with `--dry-run` to report what would happen without writing
+  anything. The original is moved into an `original_unrotated/` subfolder
+  next to it; the corrected file takes its place at the original path, and
+  an `undo_rotations_<timestamp>.sh` is written afterward (on by default;
+  `--skip-generate-undo-script` disables it) — reversing it needs no
+  `ffmpeg`/Bento4, since the original was preserved untouched, so it's just
+  plain filesystem moves, each guarded by an explicit check that the
+  preserved original is still there before either move runs. `run_phase1()`
+  and
+  `backfill.run_backfill_generate()` both check for this same `-90`
+  state before captioning and error out (telling the user to run
+  `--rotate` first) rather than caption off a sideways-decoded frame — see
+  "Rotation Correction" in `PROJECT_SPEC.md`.
 
 Module layout under `src/slate/`:
 
@@ -165,14 +187,21 @@ Module layout under `src/slate/`:
   together rather than failing at the first problem; also
   `run_metadata_tool_checks()`, a separate, conditional check for
   Bento4's `mp4dump`/`mp4extract`/`mp4edit` that only runs (and only
-  blocks startup) when `--add-metadata`/`--metadata-backfill` is passed —
-  see `metadata.py`'s entry below for why this is a hard requirement, not
-  an advisory one
+  blocks startup) when `--add-metadata`/`--metadata-backfill`/`--rotate`
+  is passed — see `metadata.py`'s entry below for why this is a hard
+  requirement, not an advisory one
 - `rename.py` — rename plan/execution, audit trail, undo script generation
 - `review_sync.py` — reconciles `rename_mappings.json` against human renames
   of preview JPEGs in `review/`, via each JPEG's SHA-256 (a plain rename
   doesn't touch file bytes, so the hash survives it); runs at the start of
   Phase 2
+- `rotate.py` — `--rotate`'s Bento4 atom splice: patches a video track's
+  `tkhd` display matrix from the 90-degree-clockwise state back to
+  identity, byte-for-byte, without touching any other atom. Also exposes
+  `read_rotation_state()` (best-effort, returns `None` rather than raising
+  when Bento4 isn't installed) so `cli.py`/`backfill.py` can refuse to
+  caption a mis-rotated file before it reaches `extraction.py` — see
+  "Rotation Correction" in `PROJECT_SPEC.md`
 
 ## Conventions
 
@@ -185,6 +214,23 @@ Module layout under `src/slate/`:
   that style rather than the space-separated form.
 - All CLI status output goes through `output.console.print` (rich markup),
   not bare `print()`.
+- `-h`/`--help`'s output is colorized by `cli._HelpAction` after the fact
+  (`rich.text.Text.highlight_regex`, not markup spliced into the string —
+  argparse's own output is full of literal `[...]` that rich's markup
+  parser would misread as tags), not by argparse itself:
+  `build_parser()`'s `ArgumentParser(..., color=False)` is required, not
+  optional, since argparse 3.14+ (this project's floor) bakes its own raw
+  ANSI codes directly into `format_help()`'s returned string whenever
+  stdout is a TTY — left on, those bytes sit in the plain text `rich` has
+  no idea are there, colliding unpredictably with `highlight_regex`'s own
+  spans. `cli._NoHyphenBreakHelpFormatter` (`break_on_hyphens=False`,
+  `break_long_words=False`) is likewise required, not cosmetic: plain
+  `textwrap`'s default hyphen-breaking splits a `--flag` name in half
+  across a wrapped line boundary, invisible in unstyled help text but
+  glaring once `_FLAG_MENTION_PATTERN` highlights the (now broken)
+  fragment. A new `add_argument(..., help=...)` string longer than one
+  line relies on both of these already being in place — don't bypass
+  `_HelpAction`/`build_parser()`'s formatter for it.
 - pytest runs with `--strict-markers` / `--strict-config` (see
   `[tool.pytest.ini_options]`): a `@pytest.mark.<x>` that isn't registered
   in the `markers` list is an error, not a silent skip. Register new
@@ -261,4 +307,13 @@ a large real ProRes RAW file. `tests/fixtures/footage/` is no longer
 empty — two real iPhone 17 Pro ProRes fixtures now live there (a Kino and
 a Moment Pro recording, used for the exiftool-fallback investigation
 above) — but neither of these two specific measurements has been taken
-against them yet.)
+against them yet. `--rotate` — fixing a clip whose video track carries a
+90-degree-clockwise rotation matrix, via the same Bento4 atom-splice
+mechanism as the `mebx`-repair fallback above, so no new dependency — has
+also landed; see "Rotation Correction" in `PROJECT_SPEC.md`. Three more
+real fixtures were added for it under `tests/fixtures/footage/`: an
+iPhone 18 Pro Final Cut Camera H.265 recording, and iPhone 18 Pro Kino
+H.265/ProRes recordings (the latter two carrying a real `mebx` track,
+confirming the rotation fix is safe there too). Auto-detecting/
+normalizing rotation states other than that one `-90` case remains open —
+see "Future Improvements" in `PROJECT_SPEC.md`.)

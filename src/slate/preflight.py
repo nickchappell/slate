@@ -30,9 +30,9 @@ _BENTO4_HINT = "Install it with: brew install bento4"
 
 
 def run_metadata_tool_checks() -> list[str]:
-    """Required only when --add-metadata or --metadata-backfill is active
-    -- unlike run_preflight_checks() below, callers must gate this on
-    those flags rather than running it unconditionally. Bento4
+    """Required only when --add-metadata, --metadata-backfill, or --rotate
+    is active -- unlike run_preflight_checks() below, callers must gate
+    this on those flags rather than running it unconditionally. Bento4
     (mp4dump/mp4extract/mp4edit) backs the mebx-track repair
     (metadata.py's _repair_mislabeled_data_tracks) that
     _ffmpeg_write_keys_family()'s fallback remux depends on to avoid
@@ -44,7 +44,10 @@ def run_metadata_tool_checks() -> list[str]:
     which are gone by the time a later invocation could try again -- see
     spec/metadata-write-corruption.md. Hence a hard requirement, same
     severity as run_preflight_checks()'s binaries, just conditional on
-    these two flags instead of unconditional."""
+    these flags instead of unconditional. --rotate depends on the same
+    three binaries for a different reason: mp4edit --replace is the atom
+    splice that fixes a clip's rotation matrix without a full remux -- see
+    rotate.py's module comment."""
     checks = [
         _check_binary("mp4dump", _BENTO4_HINT),
         _check_binary("mp4extract", _BENTO4_HINT),

@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 import tempfile
+import textwrap
 from datetime import UTC, datetime
 from pathlib import Path
 
 from rich.markup import escape
 from rich.prompt import Confirm
+from rich.text import Text
 
 from slate import output
 from slate.backfill import run_backfill_apply, run_backfill_generate
@@ -54,6 +57,7 @@ from slate.rename import (
     write_undo_script,
 )
 from slate.review_sync import hash_file, reconcile_short_caption_edits, sync_from_review
+from slate.rotate import NEEDS_FIX_LABEL, read_rotation_state, run_rotate
 
 
 class UsageError(Exception):
@@ -96,6 +100,15 @@ _USAGE_EXAMPLES = [
         "slate --model-update-check",
     ),
     (
+        "fix a clip recorded with a 90-degree-clockwise rotation matrix "
+        "back to landscape",
+        "slate --rotate clip1.MOV clip2.MOV",
+    ),
+    (
+        "preview what --rotate would do, without writing anything",
+        "slate --rotate clip1.MOV clip2.MOV --dry-run",
+    ),
+    (
         "sample more frames per clip for a richer caption (default 3)",
         "slate --input-dir ~/Movies/Footage --dry-run \\\n"
         "      --num-frames-for-caption 5",
@@ -103,17 +116,109 @@ _USAGE_EXAMPLES = [
 ]
 
 
+# Matches a --long-flag or -x short flag anywhere in help text, e.g. the
+# "--input-files" in "Mutually exclusive with --input-files" -- used to
+# colorize inline flag mentions in prose. The lookbehind excludes a bare
+# hyphen inside an ordinary word (`non-recursive`) or a negative number
+# (`rotation=-90`, real text in --rotate's own help): both require a
+# letter immediately after the dash(es), which those two cases don't have.
+_FLAG_MENTION_PATTERN = re.compile(r"(?<![\w-])--?[A-Za-z][\w-]*")
+
+# Matches just an argument's own left-column invocation -- "--dry-run" (or
+# a combined short/long pair like "-h, --help"/"--yes, -y") at the very
+# start of its line in the options section, never a mention elsewhere.
+# Argparse always renders these at a fixed 2-space indent, distinct from
+# both the deeper (>=~24-space) continuation-line indent wrapped help text
+# uses and the usage synopsis's own indent -- so anchoring on "start of
+# line, exactly 2 spaces, then a dash" cannot collide with a prose mention
+# or a wrapped continuation line. Colored separately (and second -- see
+# _HelpAction) from every other flag mention so the two are visually
+# distinct: this is the flag being *defined*, the rest are just references
+# to it.
+_FLAG_INVOCATION_PATTERN = re.compile(
+    r"^ {2}-{1,2}[A-Za-z][\w-]*(?:, -{1,2}[A-Za-z][\w-]*)?", re.MULTILINE
+)
+
+
+class _NoHyphenBreakHelpFormatter(argparse.HelpFormatter):
+    """Plain argparse.HelpFormatter wraps long help text with Python's
+    textwrap default of break_on_hyphens=True, which splits a flag name
+    straddling a wrapped line boundary in half (`--input-` on one line,
+    `dir/--input-files.` on the next) -- already true of vanilla argparse
+    output, just far more visible once _FLAG_MENTION_PATTERN starts
+    highlighting the (now broken) fragments too. break_long_words=False
+    is needed alongside it: several of this CLI's --flag mentions are
+    joined by "/" with no spaces (`--input-dir/--input-files`), long
+    enough that textwrap would otherwise force a mid-word break anyway
+    once hyphens stop being valid break points. The rare side effect is a
+    handful of lines overflowing the nominal wrap width when a slash-joined
+    flag list has nowhere else to break -- preferred over cutting a flag
+    name in half.
+
+    See build_parser()'s color=False for why argparse's own (3.14+, this
+    project's floor) built-in ANSI theme coloring is disabled at the
+    parser level rather than here -- ArgumentParser._get_formatter()
+    calls formatter._set_color(self.color) using the *parser's* `color`
+    attribute right after constructing the formatter, unconditionally
+    overwriting anything a formatter subclass's own __init__ set."""
+
+    def _split_lines(self, text, width):
+        text = self._whitespace_matcher.sub(" ", text).strip()
+        return textwrap.wrap(
+            text, width, break_on_hyphens=False, break_long_words=False
+        )
+
+    def _fill_text(self, text, width, indent):
+        text = self._whitespace_matcher.sub(" ", text).strip()
+        return textwrap.fill(
+            text,
+            width,
+            initial_indent=indent,
+            subsequent_indent=indent,
+            break_on_hyphens=False,
+            break_long_words=False,
+        )
+
+
 class _HelpAction(argparse.Action):
-    """Prints argparse's normal help, then a colorized Usage examples block
-    via `output.console` -- rich auto-detects TTY vs. redirected output, so
-    this stays consistent with every other status line the app prints
-    (colored/emoji in a real terminal, plain text when piped/redirected)."""
+    """Prints argparse's normal help -- with every --flag/-x mention
+    colorized, not just each argument's own left-column name -- then a
+    colorized Usage examples block, both via `output.console` -- rich
+    auto-detects TTY vs. redirected output, so this stays consistent with
+    every other status line the app prints (colored/emoji in a real
+    terminal, plain text when piped/redirected). `Text.highlight_regex`
+    is used rather than rich markup (`[cyan]...[/cyan]` spliced into the
+    string): argparse's own output is full of literal square brackets
+    (`[--dry-run | --rename-only]`, `[FILE ...]`), which rich's markup
+    parser would try to interpret as tags -- highlight_regex styles
+    substrings of a plain string directly, with no bracket-escaping
+    concerns at all. `soft_wrap=True` on the print call leaves argparse's
+    own line breaks alone rather than letting rich re-wrap to its own
+    detected width.
+
+    Two highlight_regex passes, in this order: every flag mention first
+    (blue -- a reference to some flag, wherever it turns up: the usage
+    synopsis, a description, another argument's own help text), then just
+    the left-column invocations (cyan, unchanged from before this
+    distinction existed) on top. Order matters -- highlight_regex appends
+    a new Span each call, and a later Span wins over an earlier one for
+    the same character range, so the second (narrower) pass is what makes
+    an argument's own invocation read as cyan rather than blue despite
+    also matching the first, broader pass."""
 
     def __init__(self, option_strings, dest=argparse.SUPPRESS, help=None):
         super().__init__(option_strings=option_strings, dest=dest, nargs=0, help=help)
 
     def __call__(self, parser, namespace, values, option_string=None):
-        parser.print_help()
+        original_formatter_class = parser.formatter_class
+        parser.formatter_class = _NoHyphenBreakHelpFormatter
+        help_text = Text(parser.format_help())
+        parser.formatter_class = original_formatter_class
+
+        help_text.highlight_regex(_FLAG_MENTION_PATTERN, style="blue")
+        help_text.highlight_regex(_FLAG_INVOCATION_PATTERN, style="cyan")
+        output.console.print(help_text, soft_wrap=True)
+
         output.console.print("\n[bold]Usage examples:[/bold]")
         for comment, command in _USAGE_EXAMPLES:
             output.console.print(f"  [dim]# {comment}[/dim]")
@@ -141,11 +246,22 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="slate",
         add_help=False,
+        # argparse (3.14+, this project's floor) auto-colorizes its own
+        # output via ANSI codes baked directly into format_help()'s
+        # returned string whenever stdout is a TTY. _HelpAction wraps
+        # that string in a rich Text and applies its own colorization via
+        # highlight_regex -- rich has no idea argparse's raw escape codes
+        # are there, so left alone they'd sit in the plain text as literal
+        # bytes, passing through independently of (and interacting
+        # unpredictably with) rich's own spans. color=False keeps rich as
+        # the sole colorizer for every code path that renders through it,
+        # including parser.error()'s plain-text usage+message.
+        color=False,
         description=(
             "Caption and rename camera footage using a local vision-language\n"
             "model. Exactly one of --dry-run / --rename-only /\n"
             "--process-and-rename / --model-update-check / "
-            "--metadata-backfill is required."
+            "--metadata-backfill / --rotate is required."
         ),
     )
     parser.add_argument(
@@ -284,6 +400,39 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--rotate",
+        nargs="+",
+        type=Path,
+        metavar="FILE",
+        help=(
+            "Standalone mode: fix a clip recorded with a 90-degree-clockwise "
+            "display rotation matrix (ffprobe's rotation=-90) back to "
+            "landscape. Clears the rotation matrix to identity via a "
+            "lossless Bento4 atom splice (mp4extract/mp4edit) -- no "
+            "re-encode, and no other track (audio, tmcd, mebx, etc.) is "
+            "touched. The original file is moved into an "
+            "original_unrotated/ subfolder alongside it; the corrected "
+            "file takes its place at the original path. Writes an "
+            "undo_rotations_<timestamp>.sh script afterward (on by "
+            "default; --skip-generate-undo-script to disable) -- undoing "
+            "never needs ffmpeg/Bento4, since the original is preserved "
+            "untouched, so it's just two plain filesystem moves per file. "
+            "A file whose rotation isn't exactly that -90 state errors "
+            "out and is skipped -- auto-detecting/correcting other "
+            "rotation states isn't supported yet. Every file's rotation "
+            "check (and its status line) runs before anything is written, "
+            "so what's about to happen is visible up front; then, unless "
+            "--dry-run or --yes/-y is passed, prompts for confirmation "
+            "before actually rotating anything. Combine with --dry-run to "
+            "report what would happen without writing anything -- no "
+            "prompt in that mode either, same as the report-only behavior "
+            "everywhere else in slate. Takes its own file list, like "
+            "--input-files; doesn't combine with --input-dir/"
+            "--input-files/--rename-only/--process-and-rename/"
+            "--model-update-check/--metadata-backfill/--add-metadata."
+        ),
+    )
+    parser.add_argument(
         "--model",
         metavar="REPO_ID",
         help=(
@@ -344,8 +493,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--skip-generate-undo-script",
         action="store_true",
         help=(
-            "Don't write an undo_renames_<timestamp>.sh reversal script "
-            "after a rename batch. Undo scripts are written by default."
+            "Don't write an undo_renames_<timestamp>.sh (or, for --rotate, "
+            "undo_rotations_<timestamp>.sh) reversal script after a rename "
+            "or rotate batch. Undo scripts are written by default."
         ),
     )
     parser.add_argument(
@@ -354,7 +504,8 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help=(
             "Skip the confirmation prompt before renaming in "
-            "--rename-only/--process-and-rename."
+            "--rename-only/--process-and-rename, or before rotating in "
+            "--rotate."
         ),
     )
     parser.add_argument(
@@ -378,6 +529,26 @@ def _validate_mode_flags(
     can express alone (--dry-run must combine freely with either axis,
     while --metadata-backfill conflicts with three specific other flags) --
     see the "Implementation note" in spec/metadata-embedding.md."""
+    if args.rotate:
+        if (
+            args.rename_only
+            or args.process_and_rename
+            or args.model_update_check
+            or args.metadata_backfill
+            or args.add_metadata
+        ):
+            parser.error(
+                "--rotate cannot be combined with --rename-only/"
+                "--process-and-rename/--model-update-check/"
+                "--metadata-backfill/--add-metadata."
+            )
+        if args.input_dir or args.input_files:
+            parser.error(
+                "--rotate takes its own file list -- don't also pass "
+                "--input-dir/--input-files."
+            )
+        return
+
     if args.metadata_backfill:
         if args.rename_only or args.process_and_rename:
             parser.error(
@@ -623,6 +794,28 @@ def run_phase1(
             continue
 
         assert group.source_file is not None
+
+        # Best-effort: read_rotation_state() returns None (never raises)
+        # when Bento4 isn't installed, so this doesn't turn Bento4 into a
+        # new hard dependency for plain captioning -- only --rotate itself
+        # requires it (see preflight.run_metadata_tool_checks()). A file
+        # actually at the -90 state errors out here rather than being
+        # captioned/renamed off a sideways-decoded frame.
+        rotation_state = read_rotation_state(group.source_file)
+        if rotation_state is not None and rotation_state.label == NEEDS_FIX_LABEL:
+            error_message = (
+                f"{group.source_file.name} has a 90-degree-clockwise "
+                "rotation matrix -- run it through --rotate first "
+                f"(slate --rotate {group.source_file.name})"
+            )
+            entry = MappingEntry(
+                status="error", original_files=original_files, error=error_message
+            )
+            new_entries.append(entry)
+            all_entries.append(entry)
+            output.error(f"{' / '.join(original_files)}: {error_message}")
+            continue
+
         tmp_frame_path = review_dir / f".tmp.{group.source_file.stem}.jpg"
         with tempfile.TemporaryDirectory(prefix="slate-frames-") as raw_frames_dir:
             try:
@@ -1099,6 +1292,44 @@ def _mode_description(
     main phases when --add-metadata is in effect (CLI flag or config.toml)
     -- --metadata-backfill's own bullets already describe metadata
     end-to-end, so it never needs a second one."""
+    if args.rotate:
+        if args.dry_run:
+            return (
+                "Rotate mode (dry-run)",
+                [
+                    "Each file's video track rotation matrix is checked "
+                    "and reported -- nothing is written. A file at "
+                    "exactly the 90-degree-clockwise state (ffprobe's "
+                    "rotation=-90) would be corrected; anything else "
+                    "(including a file that's already correct) would be "
+                    "skipped."
+                ],
+            )
+        return (
+            "Rotate mode",
+            [
+                "Each file's video track rotation matrix is checked. Only "
+                "a file at exactly the 90-degree-clockwise state "
+                "(ffprobe's rotation=-90) is corrected -- every other "
+                "file errors out and is skipped; auto-detecting/"
+                "correcting other rotation states isn't supported yet.",
+                "A matching file has its rotation matrix reset to "
+                "identity via a lossless Bento4 atom splice (mp4extract/"
+                "mp4edit) -- no re-encode, and every other track (audio, "
+                "tmcd, mebx, etc.) is left byte-for-byte untouched. The "
+                "original file is moved into an original_unrotated/ "
+                "subfolder next to it; the corrected file takes its "
+                "place at the original path/name. An undo_rotations_"
+                "<timestamp>.sh script is written afterward (on by "
+                "default) -- undoing never needs ffmpeg/Bento4, since the "
+                "original is preserved untouched, so it's just plain "
+                "filesystem moves.",
+                "Every file is checked and reported before anything is "
+                "written; unless --yes/-y is passed, confirms once with a "
+                "single Y/N prompt before rotating any of them.",
+            ],
+        )
+
     if args.metadata_backfill:
         if args.dry_run:
             return (
@@ -1202,7 +1433,7 @@ def main(argv: list[str] | None = None) -> None:
         output.console.print("[bold]slate[/bold] started")
 
     try:
-        if args.dry_run or args.process_and_rename:
+        if (args.dry_run or args.process_and_rename) and not args.rotate:
             if not args.input_dir and not args.input_files:
                 raise UsageError(
                     "--dry-run/--process-and-rename requires --input-dir or "
@@ -1217,7 +1448,9 @@ def main(argv: list[str] | None = None) -> None:
             )
 
         _run_preflight_or_exit(
-            require_metadata_tools=banner_add_metadata or args.metadata_backfill
+            require_metadata_tools=(
+                banner_add_metadata or args.metadata_backfill or bool(args.rotate)
+            )
         )
 
         (
@@ -1233,7 +1466,15 @@ def main(argv: list[str] | None = None) -> None:
         if num_frames_for_caption < 1:
             raise UsageError("--num-frames-for-caption must be >= 1")
 
-        if args.metadata_backfill:
+        if args.rotate:
+            run_rotate(
+                args.rotate,
+                dry_run=args.dry_run,
+                generate_undo_script=generate_undo,
+                assume_yes=args.yes,
+            )
+
+        elif args.metadata_backfill:
             if args.dry_run:
                 files, base_dir = _resolve_input_files(args)
                 review_dir = Path("review")

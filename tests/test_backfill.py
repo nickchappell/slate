@@ -4,6 +4,7 @@ from slate.mappings import (
     save_metadata_changes,
 )
 from slate.metadata import EmbedOutcome, ExistingMetadata
+from slate.rotate import RotationState
 
 
 def touch(path):
@@ -155,6 +156,33 @@ class TestRunBackfillGenerate:
         )
         assert new_entries[0].status == "error"
         assert "decode failed" in new_entries[0].error
+
+    def test_needs_fix_rotation_errors_before_extraction(self, tmp_path, monkeypatch):
+        source = touch(tmp_path / "a.MOV")
+        monkeypatch.setattr(backfill, "validate_media_files", lambda files: (files, []))
+        monkeypatch.setattr(
+            backfill,
+            "read_rotation_state",
+            lambda path: RotationState(trak_index=0, matrix=(), label="-90"),
+        )
+
+        def fail_if_called(*a, **k):
+            raise AssertionError("extract_frames must not run on a mis-rotated file")
+
+        monkeypatch.setattr(backfill, "extract_frames", fail_if_called)
+
+        review_dir = tmp_path / "review"
+        mappings_path = review_dir / "metadata_changes.json"
+        _all, new_entries, _skipped = backfill.run_backfill_generate(
+            [source],
+            tmp_path,
+            mappings_path,
+            review_dir,
+            model="fake-model",
+            num_frames_for_caption=3,
+        )
+        assert new_entries[0].status == "error"
+        assert "--rotate" in new_entries[0].error
 
 
 class TestRunBackfillApply:

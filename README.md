@@ -32,6 +32,7 @@ Personal-use tool. See `PROJECT_SPEC.md` for the full design.
   - [Other flags](#other-flags)
   - [Embedding Metadata -- `--add-metadata`](#embedding-metadata----add-metadata)
   - [Metadata Backfill -- `--metadata-backfill`](#metadata-backfill----metadata-backfill)
+  - [Rotation Correction -- `--rotate`](#rotation-correction----rotate)
 - [Under the Hood](#under-the-hood)
 - [Development](#development)
   - [Cutting a release](#cutting-a-release)
@@ -113,24 +114,27 @@ brew install ffmpeg exiftool bento4
 - **`exiftool`** on `PATH` -- used to embed Title/Description/Keywords
   metadata when `--add-metadata`/`--metadata-backfill` is passed (see
   "Embedding Metadata," below).
-- **`bento4`** on `PATH` -- required whenever you pass `--add-metadata` or
-  `--metadata-backfill`; not needed otherwise. It repairs a timed metadata
-  track that a rare `exiftool`-write fallback would otherwise leave
-  permanently mislabeled (see "Embedding Metadata" below). This used to be
-  an optional, best-effort dependency, but the damage it repairs can't be
-  fixed by installing `bento4` and re-running later -- the fallback remux
-  that causes it overwrites the file, and the atoms the repair needs only
-  exist in the pre-remux bytes, which are gone by then (see
+- **`bento4`** on `PATH` -- required whenever you pass `--add-metadata`,
+  `--metadata-backfill`, or `--rotate`; not needed otherwise. For the
+  first two, it repairs a timed metadata track that a rare
+  `exiftool`-write fallback would otherwise leave permanently mislabeled
+  (see "Embedding Metadata" below). This used to be an optional,
+  best-effort dependency, but the damage it repairs can't be fixed by
+  installing `bento4` and re-running later -- the fallback remux that
+  causes it overwrites the file, and the atoms the repair needs only exist
+  in the pre-remux bytes, which are gone by then (see
   `spec/metadata-write-corruption.md`). So `slate` now refuses to start
-  with either of those two flags if `bento4` isn't installed, the same way
-  it refuses to start without `ffmpeg`/`exiftool`.
+  with any of those three flags if `bento4` isn't installed, the same way
+  it refuses to start without `ffmpeg`/`exiftool`. `--rotate` uses the same
+  tool for a different reason -- it's the atom splice that fixes a clip's
+  rotation matrix without a full remux (see "Rotation Correction" below).
 
 The platform/`ffmpeg`/`ffprobe`/`qlmanage`/`sips`/`exiftool` requirements
 above are checked once at the start of every `slate` invocation (see
 "Preflight Checks" in `PROJECT_SPEC.md`); every problem is reported
 together, not one-at-a-time. `bento4` gets its own check, reported
 alongside the rest, but only runs -- and only blocks startup -- when
-`--add-metadata` or `--metadata-backfill` is passed.
+`--add-metadata`, `--metadata-backfill`, or `--rotate` is passed.
 
 ### Installing `slate` onto your `$PATH`
 
@@ -387,6 +391,52 @@ mapping file is archived to `review/applied_metadata_changes_<timestamp>.json`.
 renames anything, and its metadata write isn't optional the way
 `--add-metadata` is. See "Metadata Embedding" in `PROJECT_SPEC.md` for the
 full design.
+
+### Rotation Correction -- `--rotate`
+
+A separate, standalone mode for fixing a clip whose video track carries a
+90-degree-clockwise display rotation matrix (`ffprobe`'s
+`rotation=-90`) -- some phone camera apps write this, and `slate`'s own
+frame extraction doesn't reliably respect it. Takes its own file list,
+like `--input-files`, rather than `--input-dir`/`--input-files`:
+
+```bash
+# Preview what would happen, without writing anything:
+slate --rotate clip1.MOV clip2.MOV --dry-run
+
+# Actually fix them:
+slate --rotate clip1.MOV clip2.MOV
+```
+
+The rotation matrix is reset to identity via a lossless Bento4 atom
+splice (`mp4extract`/`mp4edit`) -- no re-encode, and every other track
+(audio, timecode, a vendor timed-metadata track, etc.) is left
+byte-for-byte untouched. The original file is moved into an
+`original_unrotated/` subfolder alongside it; the corrected file takes
+its place at the original path/name, so nothing downstream needs to learn
+a new filename. An `undo_rotations_<timestamp>.sh` script is written
+afterward (on by default; `--skip-generate-undo-script` disables it, the
+same flag the main rename flow uses) -- reversing it never needs
+`ffmpeg`/Bento4, since the original was preserved untouched rather than
+discarded, so undoing is just two plain filesystem moves per file, guarded
+by an explicit check that the preserved original is still there before
+either move runs (a clear error instead of a bare `mv` failure if
+`original_unrotated/` was deleted, or the rotation already undone).
+
+Every file is checked and its status printed before anything is written,
+then -- unless `--dry-run` or `--yes`/`-y` is passed -- a single Y/N
+prompt confirms before actually rotating any of them (nothing to confirm,
+and no prompt, if no file needs it).
+
+Only a file at exactly that `-90` state is corrected -- everything else
+(already landscape, a different rotation, an unrecognized matrix) errors
+out (or, under `--dry-run`, is reported as skipped) rather than being
+guessed at. `--dry-run`/`--process-and-rename`'s own captioning step
+checks for this same state before running the model, and refuses to
+caption a file that needs `--rotate` first rather than caption off a
+sideways-decoded frame. See "Rotation Correction" in `PROJECT_SPEC.md`
+for the full design, including why a plain `ffmpeg` remux or GPAC's
+`MP4Box` were tried and rejected in favor of Bento4.
 
 ## Under the Hood
 
@@ -709,6 +759,24 @@ Title, Description, and Keywords values, right where they'd otherwise only
 be visible by opening `rename_mappings.json` or running `exiftool`
 afterward. A no-op without `--add-metadata`.
 
+**`--rotate` reuses `--add-metadata`'s Bento4 atom-splice mechanism rather
+than a full remux.** A clip whose video track carries a 90-degree-clockwise
+rotation matrix (`ffprobe`'s `rotation=-90`) is fixed by patching just the
+`tkhd` display matrix back to identity via `mp4extract`/`mp4edit
+--replace` -- no re-encode, no new dependency (Bento4 is already required
+for `--add-metadata`/`--metadata-backfill`), and every other atom is left
+byte-for-byte untouched by construction. A plain `ffmpeg` remux was tried
+and rejected -- even a pure stream-copy remux that only touches
+rotation side data silently retagged an unrelated audio track on a real
+fixture -- and so was GPAC's `MP4Box -mx` (the tool an earlier
+AppleScript-based version of this workflow used outside `slate`), which
+turned out not to be byte-perfect either, normalizing 4 harmless-but-real
+bytes out of the video track's `stsd` during its own remux. Scoped
+deliberately narrow today: only the one rotation state real footage has
+actually shown up in gets corrected; everything else errors out rather
+than being guessed at. See "Rotation Correction" in `PROJECT_SPEC.md` for
+the full investigation.
+
 **Two-phase workflow (`--dry-run` then `--rename-only`), plus a combined
 `--process-and-rename`.** The slow/expensive step (decode + inference) is
 deliberately decoupled from the destructive step (renaming real footage),
@@ -749,8 +817,15 @@ framework, but `--input-files FILE [FILE ...]` (space-separated multi-value
 input, not repeated `--input-files` flags) needs `nargs="+"` on a named
 option, which `click` (and by extension `typer`) doesn't support for
 options -- only for positional arguments. `argparse` handles it natively,
-at the cost of writing `--help` formatting (including the colorized usage
-examples block) by hand instead of getting it for free.
+at the cost of writing `--help` formatting by hand instead of getting it
+for free: the colorized usage examples block, every `--flag`/`-x` mention
+throughout the whole help output recolored after the fact (left-column
+invocations one color, inline prose mentions another, via
+`rich.text.Text.highlight_regex` rather than markup, since argparse's
+own output is full of literal `[...]` a markup parser would misread as
+tags), argparse 3.14+'s own built-in ANSI coloring turned off so `rich`
+is the only colorizer, and a custom `HelpFormatter` so a long `--flag`
+name can't get split in half across a wrapped line.
 
 **No CI, and it's a cost decision.** The `mlx-vlm` dependency ships
 macOS-arm64-only wheels, so `uv sync` -- and any test job -- can't run on

@@ -2,15 +2,20 @@ import argparse
 from pathlib import Path
 
 import pytest
+from rich.console import Console
+from rich.text import Text
 
 import slate.config as config_module
 import slate.rename as rename_module
 from slate import cli
 from slate.cli import (
+    _FLAG_INVOCATION_PATTERN,
+    _FLAG_MENTION_PATTERN,
     UsageError,
     _check_mapping_version_or_exit,
     _effective_settings,
     _mode_description,
+    _NoHyphenBreakHelpFormatter,
     _resolve_input_files,
     _run_preflight_or_exit,
     _validate_mode_flags,
@@ -20,6 +25,7 @@ from slate.config import CONFIG_ENV_VAR
 from slate.mappings import APP_VERSION, MappingEntry, load_mappings, save_mappings
 from slate.metadata import EmbedOutcome
 from slate.review_sync import hash_file
+from slate.rotate import RotationState
 
 
 def touch(path):
@@ -191,6 +197,48 @@ class TestValidateModeFlags:
         )
         _validate_mode_flags(args, parser)  # does not raise
 
+    def test_rotate_alone_is_valid(self):
+        parser = build_parser()
+        args = self._args(parser, ["--rotate", "a.mov", "b.mov"])
+        _validate_mode_flags(args, parser)  # does not raise
+
+    def test_rotate_with_dry_run_is_valid(self):
+        parser = build_parser()
+        args = self._args(parser, ["--rotate", "a.mov", "--dry-run"])
+        _validate_mode_flags(args, parser)  # does not raise
+
+    def test_rotate_with_rename_only_is_an_error(self):
+        parser = build_parser()
+        args = self._args(
+            parser, ["--rotate", "a.mov", "--rename-only", "--rename-mappings", "x"]
+        )
+        with pytest.raises(SystemExit):
+            _validate_mode_flags(args, parser)
+
+    def test_rotate_with_add_metadata_is_an_error(self):
+        parser = build_parser()
+        args = self._args(parser, ["--rotate", "a.mov", "--add-metadata"])
+        with pytest.raises(SystemExit):
+            _validate_mode_flags(args, parser)
+
+    def test_rotate_with_metadata_backfill_is_an_error(self):
+        parser = build_parser()
+        args = self._args(parser, ["--rotate", "a.mov", "--metadata-backfill"])
+        with pytest.raises(SystemExit):
+            _validate_mode_flags(args, parser)
+
+    def test_rotate_with_input_dir_is_an_error(self):
+        parser = build_parser()
+        args = self._args(parser, ["--rotate", "a.mov", "--input-dir", "x"])
+        with pytest.raises(SystemExit):
+            _validate_mode_flags(args, parser)
+
+    def test_rotate_with_input_files_is_an_error(self):
+        parser = build_parser()
+        args = self._args(parser, ["--rotate", "a.mov", "--input-files", "b.mov"])
+        with pytest.raises(SystemExit):
+            _validate_mode_flags(args, parser)
+
 
 class TestModeDescription:
     def _args(self, argv):
@@ -248,6 +296,18 @@ class TestModeDescription:
         args = self._args(["--model-update-check"])
         name, bullets = _mode_description(args, add_metadata=False)
         assert name == "Model-update-check mode"
+        assert len(bullets) == 1
+
+    def test_rotate_has_three_bullets(self):
+        args = self._args(["--rotate", "a.mov"])
+        name, bullets = _mode_description(args, add_metadata=False)
+        assert name == "Rotate mode"
+        assert len(bullets) == 3
+
+    def test_rotate_dry_run_has_one_bullet(self):
+        args = self._args(["--rotate", "a.mov", "--dry-run"])
+        name, bullets = _mode_description(args, add_metadata=False)
+        assert name == "Rotate mode (dry-run)"
         assert len(bullets) == 1
 
 
@@ -1125,6 +1185,89 @@ class TestRunPhase1PreviewHash:
         assert entry_a_b.preview_jpeg_sha256 == hash_file(preview_a_b)
 
 
+class TestRunPhase1RotationCheck:
+    """See rotate.NEEDS_FIX_LABEL -- a file at the 90-degree-clockwise
+    rotation state must error out here rather than being captioned/renamed
+    off a sideways-decoded frame."""
+
+    def test_needs_fix_rotation_errors_before_extraction(self, tmp_path, monkeypatch):
+        source = touch(tmp_path / "a.MOV")
+        monkeypatch.setattr(cli, "validate_media_files", lambda files: (files, []))
+        monkeypatch.setattr(
+            cli,
+            "read_rotation_state",
+            lambda path: RotationState(trak_index=0, matrix=(), label="-90"),
+        )
+
+        def fail_if_called(*a, **k):
+            raise AssertionError("extract_frames must not run on a mis-rotated file")
+
+        monkeypatch.setattr(cli, "extract_frames", fail_if_called)
+
+        review_dir = tmp_path / "review"
+        mappings_path = review_dir / "rename_mappings.json"
+
+        _all, new_entries, _skipped = cli.run_phase1(
+            [source],
+            tmp_path,
+            mappings_path,
+            review_dir,
+            model="fake-model",
+            prompt="fake-prompt",
+            prepend=False,
+            prefix="",
+            suffix="",
+            max_file_name_length=255,
+            num_frames_for_caption=3,
+        )
+
+        assert len(new_entries) == 1
+        entry = new_entries[0]
+        assert entry.status == "error"
+        assert "--rotate" in entry.error
+
+    def test_rotation_undeterminable_proceeds_normally(self, tmp_path, monkeypatch):
+        # Mirrors Bento4 not being installed -- read_rotation_state()
+        # returns None, and captioning must proceed exactly as it did
+        # before --rotate existed.
+        source = touch(tmp_path / "a.MOV")
+        monkeypatch.setattr(cli, "validate_media_files", lambda files: (files, []))
+        monkeypatch.setattr(cli, "read_rotation_state", lambda path: None)
+
+        def fake_extract_frames(source, output_dir, num_frames):
+            frame = output_dir / "frame_0.jpg"
+            frame.write_bytes(b"fake-frame-bytes")
+            return [frame]
+
+        monkeypatch.setattr(cli, "extract_frames", fake_extract_frames)
+        monkeypatch.setattr(cli, "generate_caption", lambda *a, **k: "a caption")
+        monkeypatch.setattr(
+            cli,
+            "build_montage",
+            lambda frame_paths, output_jpeg: output_jpeg.write_bytes(b"fake-montage"),
+        )
+
+        review_dir = tmp_path / "review"
+        mappings_path = review_dir / "rename_mappings.json"
+
+        _all, new_entries, _skipped = cli.run_phase1(
+            [source],
+            tmp_path,
+            mappings_path,
+            review_dir,
+            model="fake-model",
+            prompt="fake-prompt",
+            prepend=False,
+            prefix="",
+            suffix="",
+            max_file_name_length=255,
+            num_frames_for_caption=3,
+        )
+
+        assert len(new_entries) == 1
+        assert new_entries[0].status == "ok"
+
+
 class TestRunPhase1AddMetadata:
     def _stub_pipeline(self, monkeypatch, caption_text):
         monkeypatch.setattr(cli, "validate_media_files", lambda files: (files, []))
@@ -1731,3 +1874,87 @@ class TestRunPhase2VerboseMetadata:
         )
 
         assert printed == []
+
+
+class TestHelpOutput:
+    """See _HelpAction/_NoHyphenBreakHelpFormatter: every --flag/-x mention
+    in --help's output is colorized, and argparse's own built-in ANSI
+    theme coloring (3.14+) is disabled so rich is the only colorizer."""
+
+    def test_color_is_disabled_on_the_parser(self):
+        # _get_formatter() calls formatter._set_color(self.color) using
+        # this attribute, unconditionally overwriting anything a
+        # formatter subclass's own __init__ set -- this is the actual
+        # switch that matters.
+        assert build_parser().color is False
+
+    def test_no_flag_mention_is_split_across_a_wrapped_line(self):
+        # A flag name straddling argparse's own line-wrap boundary would
+        # show up here as a fragment that isn't a real registered option
+        # string (e.g. "--input-" from a naive break_on_hyphens wrap) --
+        # this is the regression this formatter exists to prevent.
+        parser = build_parser()
+        parser.formatter_class = _NoHyphenBreakHelpFormatter
+        help_text = parser.format_help()
+
+        known_options = {
+            opt for action in parser._actions for opt in action.option_strings
+        }
+        mentioned = set(_FLAG_MENTION_PATTERN.findall(help_text))
+        unrecognized = mentioned - known_options
+        assert not unrecognized, f"likely wrap-split flag fragment(s): {unrecognized}"
+
+    def test_flag_mention_pattern_ignores_non_flag_hyphens(self):
+        # Real text from --rotate's own help: a negative number and a
+        # hyphenated word, neither of which is a flag.
+        text = "ffprobe's rotation=-90, a 90-degree-clockwise matrix"
+        assert _FLAG_MENTION_PATTERN.findall(text) == []
+
+    def test_flag_mention_pattern_splits_slash_joined_flags(self):
+        assert _FLAG_MENTION_PATTERN.findall("--yes/-y") == ["--yes", "-y"]
+
+    def test_help_action_prints_usage_examples_and_exits(self, capsys):
+        parser = build_parser()
+        with pytest.raises(SystemExit):
+            parser.parse_args(["--help"])
+
+        out = capsys.readouterr().out
+        assert "--dry-run" in out
+        assert "Usage examples:" in out
+
+    def test_invocation_pattern_matches_only_the_left_column(self):
+        text = "  --dry-run             Phase 1: scan.\nsee --dry-run for details"
+        assert _FLAG_INVOCATION_PATTERN.findall(text) == ["  --dry-run"]
+
+    def test_invocation_pattern_matches_a_combined_short_and_long_pair(self):
+        text = "  -h, --help            show this help message"
+        assert _FLAG_INVOCATION_PATTERN.findall(text) == ["  -h, --help"]
+
+    def test_invocation_pattern_ignores_a_deeper_indented_continuation_line(self):
+        # Wrapped continuation lines use the deeper help-column indent
+        # (>=~24 spaces), never the 2-space invocation indent -- a flag
+        # mention there is prose, not a second invocation.
+        text = (
+            "  --input-files FILE [FILE ...]\n"
+            "                        Operate on --input-dir instead."
+        )
+        assert _FLAG_INVOCATION_PATTERN.findall(text) == ["  --input-files"]
+
+    def test_prose_mentions_and_invocations_render_in_different_colors(self):
+        # Mirrors _HelpAction.__call__'s exact two-pass sequence: broad
+        # blue first, narrower cyan second (later Span wins on overlap).
+        help_text = Text(
+            "  --dry-run             Phase 1.\n"
+            "                        Mutually exclusive with --input-files."
+        )
+        help_text.highlight_regex(_FLAG_MENTION_PATTERN, style="blue")
+        help_text.highlight_regex(_FLAG_INVOCATION_PATTERN, style="cyan")
+
+        console = Console()
+        invocation_offset = help_text.plain.index("--dry-run")
+        prose_offset = help_text.plain.index("--input-files")
+
+        assert help_text.get_style_at_offset(console, invocation_offset).color.name == (
+            "cyan"
+        )
+        assert help_text.get_style_at_offset(console, prose_offset).color.name == "blue"
