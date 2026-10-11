@@ -288,7 +288,18 @@ Ideas not yet implemented. Each should get a full write-up in
 `PROJECT_SPEC.md` (and a mention in README.md's "Technical Decisions and
 Opinions") when it lands.
 
-None currently open. (Multi-frame input for VLM inference — sampling
+- **Upgrade to Python 3.15.** Blocked, not just unstarted: as of 2026-10-11,
+  3.15 is still at `3.15.0rc2` (no final release yet), and `mlx` — the real
+  platform-pinned dependency underneath `mlx-vlm` (which itself ships as a
+  pure-Python `py3-none-any` wheel) — has published `cp310`through `cp314`/
+  `cp314t` wheels on PyPI but no `cp315` build. Bumping `requires-python`
+  (`pyproject.toml`) and `target-version` (`[tool.ruff]`) to 3.15 now would
+  break `uv sync` for everyone until both catch up. Before attempting this,
+  re-check both: `uv python list --all-versions | grep 3.15` for a non-rc
+  final, and PyPI's `mlx` JSON (`https://pypi.org/pypi/mlx/json`) for a
+  `cp315` wheel filename.
+
+(Multi-frame input for VLM inference — sampling
 several frames per clip, fed to the model as one native multi-image call,
 with a composited left-to-right strip as the review-only preview JPEG —
 landed; see "Frame Extraction Strategy" in `PROJECT_SPEC.md`. Metadata
